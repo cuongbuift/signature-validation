@@ -62,7 +62,7 @@ def _get_ocr_reader():
     import easyocr  # imported lazily so startup is fast
 
     logger.info("Loading EasyOCR model for vi+en …")
-    reader = easyocr.Reader(["vi", "en"], gpu=False, verbose=False)
+    reader = easyocr.Reader(["vi", "en"], gpu=True, verbose=False)
     logger.info("EasyOCR ready.")
     return reader
 
@@ -95,8 +95,11 @@ def _ocr_find_label_bottom(img: Image.Image) -> Optional[int]:
 
     results = reader.readtext(img_np, detail=1, paragraph=False)
 
-    best_y_bottom: Optional[int] = None
-    best_y_top: Optional[int] = None
+    # We want to crop from BELOW all label lines, so track both:
+    #   - topmost_y_top   : to know where the label block starts
+    #   - bottommost_y_bottom : to know where the last label line ends
+    topmost_y_top: Optional[int] = None
+    bottommost_y_bottom: Optional[int] = None
 
     for (bbox, text, _conf) in results:
         norm       = _normalize(text)
@@ -111,33 +114,121 @@ def _ocr_find_label_bottom(img: Image.Image) -> Optional[int]:
                   any(kw       in norm_ascii  for kw in FOOTER_KEYWORDS_ASCII)
 
         if matched:
-            # Keep the topmost match (first label line on the page)
-            if best_y_top is None or y_top < best_y_top:
-                best_y_bottom = y_bottom
-                best_y_top    = y_top
+            if topmost_y_top is None or y_top < topmost_y_top:
+                topmost_y_top = y_top
+            if bottommost_y_bottom is None or y_bottom > bottommost_y_bottom:
+                bottommost_y_bottom = y_bottom
 
-    return best_y_bottom
+    # Only use the bottommost label if all matched lines are within a single
+    # label block (within 3× the label block height of the topmost line).
+    # This prevents accidentally skipping to a label on a completely different
+    # part of the page.
+    if topmost_y_top is not None and bottommost_y_bottom is not None:
+        block_height = bottommost_y_bottom - topmost_y_top
+        if block_height > 300:  # sanity cap — labels are never 300 px apart
+            return bottommost_y_bottom  # something unusual; still use bottommost
+    return bottommost_y_bottom
 
 
-def _tight_crop(img: Image.Image, padding: int = 18) -> Optional[Image.Image]:
+def _build_clean_ink_mask(arr: np.ndarray) -> np.ndarray:
     """
-    Auto-crop an image to the tight bounding box of its non-white content.
-    `padding` (pixels) is added on all sides so marks aren't touching the edge.
-    Returns None if no ink is found (blank region).
+    Return a binary mask (uint8, 0/255) that keeps only handwriting-like ink
+    while removing:
+      - Scanner binding artifacts (thin coloured lines at page edges)
+      - Horizontal/vertical ruling lines from the form
+      - Isolated noise specks (too small to be a stroke)
+      - Components hugging the very bottom edge (scanner fold marks)
+
+    Parameters
+    ----------
+    arr : H×W×3 uint8 RGB array
+
+    Returns
+    -------
+    clean : H×W uint8 mask (255 = keep)
     """
-    arr = np.array(img.convert("RGB"))
-
-    # A pixel is considered "ink" when it is darker than the threshold on any channel.
-    # Threshold 230 catches light-grey strokes too.
-    ink_mask = np.any(arr < 230, axis=2)  # shape (H, W), True = ink pixel
-
-    rows = np.where(ink_mask.any(axis=1))[0]  # rows that contain ink
-    cols = np.where(ink_mask.any(axis=0))[0]  # cols that contain ink
-
-    if rows.size == 0 or cols.size == 0:
-        return None  # nothing to crop
+    import cv2
 
     h, w = arr.shape[:2]
+
+    # ── 1. Grayscale → binary ink mask ──────────────────────────────────────
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    # Adaptive threshold handles uneven scan lighting better than a fixed value
+    binary = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        blockSize=31, C=12,
+    )
+
+    # ── 2. Erase scanner binding marks (pink / magenta streaks) ─────────────
+    # These come from scanning near the physical book spine.
+    # Characteristic: R high, G low-mid, B mid → not normal black/blue ink.
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    pink_mask = ((r.astype(int) - g.astype(int)) > 40) & \
+                ((r.astype(int) - b.astype(int)) < 60) & \
+                (r > 140)
+    binary[pink_mask] = 0
+
+    # ── 3. Erase horizontal ruling lines (form borders, table lines) ────────
+    # A true ruling line is very wide (> 55 % of page width) and 1-3 px tall.
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(1, w * 55 // 100), 1))
+    hlines   = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
+    binary   = cv2.subtract(binary, hlines)
+
+    # Erase vertical ruling lines similarly
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(1, h * 40 // 100)))
+    vlines   = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kernel)
+    binary   = cv2.subtract(binary, vlines)
+
+    # ── 4. Connected-component filtering ────────────────────────────────────
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        binary, connectivity=8
+    )
+    clean = np.zeros_like(binary)
+
+    for i in range(1, num_labels):  # label 0 = background
+        area    = int(stats[i, cv2.CC_STAT_AREA])
+        comp_x  = int(stats[i, cv2.CC_STAT_LEFT])
+        comp_y  = int(stats[i, cv2.CC_STAT_TOP])
+        comp_w  = int(stats[i, cv2.CC_STAT_WIDTH])
+        comp_h  = int(stats[i, cv2.CC_STAT_HEIGHT])
+
+        # (a) Discard tiny noise specks
+        if area < 40:
+            continue
+
+        # (b) Discard very thin wide stripes (residual ruling lines)
+        if comp_w > w * 0.55 and comp_h <= 4:
+            continue
+
+        # (c) Discard components whose bottom edge sits within the last 4 % of
+        #     the image — these are scanner fold / binding marks.
+        bottom_edge = comp_y + comp_h
+        if bottom_edge > h * 0.96 and comp_y > h * 0.88:
+            continue
+
+        clean[labels == i] = 255
+
+    return clean
+
+
+def _tight_crop(img: Image.Image, padding: int = 20) -> Optional[Image.Image]:
+    """
+    Remove scanner artefacts and noise, then tight-crop to the bounding box
+    of remaining handwriting-like ink strokes.
+    """
+    arr  = np.array(img.convert("RGB"))
+    h, w = arr.shape[:2]
+
+    clean = _build_clean_ink_mask(arr)
+
+    rows = np.where(clean.any(axis=1))[0]
+    cols = np.where(clean.any(axis=0))[0]
+
+    if rows.size == 0 or cols.size == 0:
+        return None
+
     r0 = max(int(rows[0])  - padding, 0)
     r1 = min(int(rows[-1]) + padding, h)
     c0 = max(int(cols[0])  - padding, 0)
@@ -151,12 +242,21 @@ def _crop_signature(img: Image.Image, label_y_bottom: int) -> Image.Image:
     1. Slice the raw region: from below the label line to the page bottom,
        left 40 % of the page.
     2. Tight-crop to remove surrounding white space.
+    3. Cap height to the crop width to avoid overly tall results from residual
+       artifacts at the bottom of the scan.
     """
     w, h = img.size
     raw = img.crop((0, label_y_bottom, int(w * 0.40), h))
 
     tight = _tight_crop(raw)
-    return tight if tight is not None else raw
+    result = tight if tight is not None else raw
+
+    # Enforce max height = width so scanner-fold artifacts can't inflate the crop
+    rw, rh = result.size
+    if rh > rw:
+        result = result.crop((0, 0, rw, rw))
+
+    return result
 
 
 def _pil_to_b64(img: Image.Image) -> str:
