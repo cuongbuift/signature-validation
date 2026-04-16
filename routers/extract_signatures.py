@@ -22,19 +22,38 @@ router = APIRouter(tags=["Extract Signatures"])
 RENDER_DPI = 200
 SCALE = RENDER_DPI / 72  # PyMuPDF default canvas is 72 DPI
 
-# ── OCR keyword (Vietnamese, normalised to NFC) ───────────────────────────────
-CUSTOMER_LABEL = unicodedata.normalize("NFC", "Khách hàng đã nhận đủ hàng")
-
-# Keywords that indicate a signature footer area even when OCR is imperfect
-FOOTER_KEYWORDS = [
-    unicodedata.normalize("NFC", kw)
-    for kw in [
-        "Khách hàng đã nhận",
-        "nhận đủ hàng",
-        "Ký và ghi rõ",
-        "ghi rõ họ tên",
-    ]
+# ── OCR keywords ──────────────────────────────────────────────────────────────
+# Primary keywords (with Vietnamese diacritics, NFC-normalised)
+_KW_WITH_DIACRITICS = [
+    "Khách hàng đã nhận đủ hàng",
+    "Khách hàng đã nhận",
+    "nhận đủ hàng",
+    "Ký và ghi rõ họ tên",
+    "ghi rõ họ tên",
 ]
+
+# ASCII fallback keywords — used when OCR drops diacritics (common in low-res scans)
+_KW_ASCII_FALLBACK = [
+    "Khach hang da nhan du hang",
+    "Khach hang da nhan",
+    "nhan du hang",
+    "Ky va ghi ro ho ten",
+    "ghi ro ho ten",
+]
+
+FOOTER_KEYWORDS = [unicodedata.normalize("NFC", kw) for kw in _KW_WITH_DIACRITICS]
+FOOTER_KEYWORDS_ASCII = [kw.lower() for kw in _KW_ASCII_FALLBACK]
+
+
+def _strip_diacritics(text: str) -> str:
+    """Return a rough ASCII version of *text* for fuzzy matching.
+    Handles Vietnamese-specific letters that NFKD does not fully decompose (đ → d).
+    """
+    # Replace characters NFKD won't decompose
+    _SPECIAL = str.maketrans("đĐ", "dD")
+    text = text.translate(_SPECIAL)
+    nfkd = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
 
 # ── Lazy EasyOCR reader (loaded once, reused across requests) ──────────────────
@@ -64,46 +83,80 @@ def _ocr_find_label_bottom(img: Image.Image) -> Optional[int]:
     """
     Run OCR on *img* and return the **y pixel coordinate of the bottom edge**
     of the line containing the customer-label keyword.
+
+    Matching strategy (in order):
+      1. Exact Vietnamese keyword (NFC) — highest confidence
+      2. ASCII-stripped keyword — catches OCR that drops diacritics
+
     Returns None if the label is not found.
     """
     reader = _get_ocr_reader()
     img_np = np.array(img)
 
-    # detail=1 → returns (bbox, text, confidence)
     results = reader.readtext(img_np, detail=1, paragraph=False)
 
     best_y_bottom: Optional[int] = None
     best_y_top: Optional[int] = None
 
-    for (bbox, text, conf) in results:
-        norm = _normalize(text)
-        # bbox is [[x0,y0],[x1,y0],[x1,y1],[x0,y1]]
-        ys = [pt[1] for pt in bbox]
+    for (bbox, text, _conf) in results:
+        norm       = _normalize(text)
+        norm_lower = norm.lower()
+        norm_ascii = _strip_diacritics(norm)
+
+        ys       = [pt[1] for pt in bbox]
         y_top    = int(min(ys))
         y_bottom = int(max(ys))
 
-        for kw in FOOTER_KEYWORDS:
-            if kw.lower() in norm.lower():
-                if best_y_bottom is None or y_top < (best_y_top or 9999):
-                    best_y_bottom = y_bottom
-                    best_y_top    = y_top
-                break
+        matched = any(kw.lower() in norm_lower for kw in FOOTER_KEYWORDS) or \
+                  any(kw       in norm_ascii  for kw in FOOTER_KEYWORDS_ASCII)
+
+        if matched:
+            # Keep the topmost match (first label line on the page)
+            if best_y_top is None or y_top < best_y_top:
+                best_y_bottom = y_bottom
+                best_y_top    = y_top
 
     return best_y_bottom
 
 
+def _tight_crop(img: Image.Image, padding: int = 18) -> Optional[Image.Image]:
+    """
+    Auto-crop an image to the tight bounding box of its non-white content.
+    `padding` (pixels) is added on all sides so marks aren't touching the edge.
+    Returns None if no ink is found (blank region).
+    """
+    arr = np.array(img.convert("RGB"))
+
+    # A pixel is considered "ink" when it is darker than the threshold on any channel.
+    # Threshold 230 catches light-grey strokes too.
+    ink_mask = np.any(arr < 230, axis=2)  # shape (H, W), True = ink pixel
+
+    rows = np.where(ink_mask.any(axis=1))[0]  # rows that contain ink
+    cols = np.where(ink_mask.any(axis=0))[0]  # cols that contain ink
+
+    if rows.size == 0 or cols.size == 0:
+        return None  # nothing to crop
+
+    h, w = arr.shape[:2]
+    r0 = max(int(rows[0])  - padding, 0)
+    r1 = min(int(rows[-1]) + padding, h)
+    c0 = max(int(cols[0])  - padding, 0)
+    c1 = min(int(cols[-1]) + padding, w)
+
+    return img.crop((c0, r0, c1, r1))
+
+
 def _crop_signature(img: Image.Image, label_y_bottom: int) -> Image.Image:
     """
-    Given the bottom-y of the label text, crop the customer-signature region:
-      - vertically: from label_y_bottom to label_y_bottom + ~200 px (at 200 DPI)
-      - horizontally: left 40 % of the page
+    1. Slice the raw region: from below the label line to the page bottom,
+       left 40 % of the page.
+    2. Tight-crop to remove surrounding white space.
     """
     w, h = img.size
-    x0 = 0
-    x1 = int(w * 0.40)
-    y0 = label_y_bottom
-    y1 = h  # extend to the bottom of the page so nothing gets cut off
-    return img.crop((x0, y0, x1, y1))
+    raw = img.crop((0, label_y_bottom, int(w * 0.40), h))
+
+    tight = _tight_crop(raw)
+    return tight if tight is not None else raw
 
 
 def _pil_to_b64(img: Image.Image) -> str:
@@ -128,19 +181,28 @@ def extract_signatures_from_pdf(pdf_bytes: bytes) -> list[dict]:
     for page_num in range(len(doc)):
         page = doc[page_num]
         img  = _page_to_pil(page)
+        w, h = img.size
 
-        # --- OCR: search in the bottom 35 % of the page only (faster + accurate)
-        w, h  = img.size
-        roi_y = int(h * 0.65)
-        roi   = img.crop((0, roi_y, w, h))
+        # Two-pass OCR search:
+        #   Pass 1 — bottom 50 % of the page (fast, covers most single-page DOs)
+        #   Pass 2 — full page (catches continuation pages where the label sits higher)
+        label_y_bottom: Optional[int] = None
+        for roi_start_frac in (0.50, 0.0):
+            roi_y = int(h * roi_start_frac)
+            roi   = img.crop((0, roi_y, w, h))
 
-        label_y_in_roi = _ocr_find_label_bottom(roi)
-        if label_y_in_roi is None:
-            logger.debug("Page %d: label not found by OCR, skipping.", page_num + 1)
+            found = _ocr_find_label_bottom(roi)
+            if found is not None:
+                label_y_bottom = roi_y + found
+                logger.debug(
+                    "Page %d: label found at y=%d (roi_start=%.0f%%)",
+                    page_num + 1, label_y_bottom, roi_start_frac * 100,
+                )
+                break
+
+        if label_y_bottom is None:
+            logger.debug("Page %d: label not found, skipping.", page_num + 1)
             continue
-
-        # Convert ROI-relative y back to full-image y
-        label_y_bottom = roi_y + label_y_in_roi
 
         crop = _crop_signature(img, label_y_bottom)
 
