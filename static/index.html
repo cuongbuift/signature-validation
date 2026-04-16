@@ -1,0 +1,1737 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Signature Validation</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue:    #2563eb;
+      --blue-d:  #1d4ed8;
+      --blue-l:  #eff6ff;
+      --green:   #16a34a;
+      --red:     #ef4444;
+      --red-d:   #dc2626;
+      --gray-50: #f9fafb;
+      --gray-100:#f3f4f6;
+      --gray-200:#e5e7eb;
+      --gray-400:#9ca3af;
+      --gray-500:#6b7280;
+      --gray-700:#374151;
+      --gray-900:#111827;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      color: var(--gray-900);
+    }
+
+    /* ══════════════════ LAYOUT ══════════════════ */
+    .app-shell {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 16px 64px;
+    }
+
+    /* ══════════════════ NAV ══════════════════ */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .topbar-brand {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--blue);
+      letter-spacing: -.3px;
+      cursor: pointer;
+    }
+    .topbar-brand span { color: var(--gray-500); font-weight: 400; font-size: .85rem; margin-left: 6px; }
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: .83rem;
+      color: var(--gray-400);
+    }
+    .breadcrumb .sep { font-size: .7rem; }
+    .breadcrumb .crumb-link { color: var(--blue); cursor: pointer; }
+    .breadcrumb .crumb-link:hover { text-decoration: underline; }
+
+    /* ══════════════════ CARD ══════════════════ */
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 2px 16px rgba(0,0,0,.07);
+      overflow: hidden;
+    }
+    .card-header {
+      background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+      padding: 24px 28px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .card-header h1 { font-size: 1.2rem; font-weight: 700; }
+    .card-header p  { font-size: .85rem; opacity: .8; margin-top: 2px; }
+    .card-body { padding: 28px; }
+
+    /* ══════════════════ BUTTON ══════════════════ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 18px;
+      border-radius: 8px;
+      border: none;
+      font-size: .9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-primary  { background: var(--blue); color: #fff; }
+    .btn-primary:hover:not(:disabled)  { background: var(--blue-d); }
+    .btn-secondary{ background: var(--gray-100); color: var(--gray-700); }
+    .btn-secondary:hover:not(:disabled){ background: var(--gray-200); }
+    .btn-danger   { background: #fee2e2; color: var(--red-d); }
+    .btn-danger:hover:not(:disabled)   { background: #fecaca; }
+    .btn-icon {
+      padding: 7px 10px;
+      border-radius: 7px;
+      border: none;
+      cursor: pointer;
+      font-size: .85rem;
+      font-weight: 600;
+      transition: background .15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn-icon.edit   { background: #dbeafe; color: #1d4ed8; }
+    .btn-icon.edit:hover   { background: #bfdbfe; }
+    .btn-icon.delete { background: #fee2e2; color: var(--red-d); }
+    .btn-icon.delete:hover { background: #fecaca; }
+    .btn-icon.check  { background: #f3e8ff; color: #7e22ce; }
+    .btn-icon.check:hover  { background: #e9d5ff; }
+    .btn-sm { padding: 6px 12px; font-size: .82rem; }
+
+    /* ══════════════════ TABLE ══════════════════ */
+    .table-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .search-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--gray-50);
+      border: 1.5px solid var(--gray-200);
+      border-radius: 8px;
+      padding: 8px 12px;
+      flex: 1;
+      max-width: 300px;
+    }
+    .search-box input {
+      border: none;
+      background: transparent;
+      outline: none;
+      font-size: .9rem;
+      width: 100%;
+      color: var(--gray-900);
+    }
+    .search-box svg { color: var(--gray-400); flex-shrink: 0; }
+
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 10px;
+      border: 1px solid var(--gray-200);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    thead { background: var(--gray-50); }
+    th {
+      padding: 11px 16px;
+      text-align: left;
+      font-size: .75rem;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      border-bottom: 1px solid var(--gray-200);
+      white-space: nowrap;
+    }
+    td {
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--gray-100);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tbody tr { transition: background .1s; }
+    tbody tr:hover { background: var(--gray-50); }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-size: .75rem;
+      font-weight: 600;
+    }
+    .badge-sig { background: #dcfce7; color: #166534; }
+    .badge-nosig { background: #fef3c7; color: #92400e; }
+
+    .actions-cell { display: flex; gap: 6px; }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px 16px;
+      color: var(--gray-400);
+    }
+    .empty-state svg { margin-bottom: 12px; color: var(--gray-300); }
+    .empty-state p { font-size: .9rem; }
+
+    .table-meta {
+      margin-top: 12px;
+      font-size: .78rem;
+      color: var(--gray-400);
+    }
+
+    /* ══════════════════ FORM ══════════════════ */
+    .section-label {
+      font-size: .7rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      margin-bottom: 16px;
+    }
+    .divider { border: none; border-top: 1px solid var(--gray-200); margin: 24px 0; }
+
+    .field { margin-bottom: 18px; }
+    .field label {
+      display: block;
+      font-size: .85rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--gray-700);
+    }
+    .field label .req { color: var(--red); margin-left: 2px; }
+    .field input[type="text"] {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1.5px solid var(--gray-200);
+      border-radius: 8px;
+      font-size: .95rem;
+      outline: none;
+      transition: border-color .2s;
+      color: var(--gray-900);
+    }
+    .field input[type="text"]:focus { border-color: var(--blue); }
+    .field input[type="text"].err   { border-color: var(--red); }
+    .field input[type="text"]:disabled {
+      background: var(--gray-100);
+      color: var(--gray-500);
+      cursor: not-allowed;
+    }
+    .field-err { font-size: .78rem; color: var(--red); margin-top: 5px; display: none; }
+
+    /* ── Steps ── */
+    .steps { display: flex; margin-bottom: 24px; }
+    .step  { flex: 1; text-align: center; position: relative; }
+    .step::after {
+      content: ''; position: absolute;
+      top: 15px; left: 50%; right: -50%;
+      height: 2px; background: var(--gray-200); z-index: 0;
+    }
+    .step:last-child::after { display: none; }
+    .step-dot {
+      width: 30px; height: 30px; border-radius: 50%;
+      background: var(--gray-200); color: var(--gray-400);
+      font-weight: 700; font-size: .82rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      position: relative; z-index: 1;
+      transition: background .3s, color .3s;
+    }
+    .step.active .step-dot { background: var(--blue);  color: #fff; }
+    .step.done   .step-dot { background: var(--green); color: #fff; }
+    .step-label { font-size: .68rem; color: var(--gray-400); margin-top: 4px; font-weight: 500; }
+    .step.active .step-label { color: var(--blue);  font-weight: 600; }
+    .step.done   .step-label { color: var(--green); }
+
+    /* ── Signature slots ── */
+    .sig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+    .sig-slot {
+      position: relative;
+      border: 2px dashed var(--gray-200);
+      border-radius: 12px;
+      background: var(--gray-50);
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      overflow: hidden;
+      aspect-ratio: 3/2;
+    }
+    .sig-slot:hover       { border-color: var(--blue); background: var(--blue-l); }
+    .sig-slot.drag-over   { border-color: var(--blue); background: #dbeafe; }
+    .sig-slot.has-file    { border-style: solid; border-color: #22c55e; background: #f0fdf4; }
+    .sig-slot.err-slot    { border-color: var(--red); background: #fff1f2; }
+
+    .sig-slot input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+      z-index: 2;
+    }
+    .sig-placeholder {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; height: 100%; gap: 6px; pointer-events: none;
+    }
+    .sig-placeholder svg { color: var(--gray-400); }
+    .sig-placeholder .slot-title { font-size: .8rem; font-weight: 600; color: var(--gray-500); }
+    .sig-placeholder .slot-hint  { font-size: .7rem; color: var(--gray-400); text-align: center; padding: 0 6px; }
+
+    .sig-preview { display: none; position: relative; height: 100%; }
+    .sig-preview img { width: 100%; height: 100%; object-fit: contain; padding: 8px; }
+    .sig-preview .rm-btn {
+      position: absolute; top: 5px; right: 5px;
+      width: 20px; height: 20px;
+      background: var(--red); border-radius: 50%; border: none;
+      cursor: pointer; color: #fff; font-size: 12px;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 2; transition: background .15s; pointer-events: all;
+    }
+    .sig-preview .rm-btn:hover { background: var(--red-d); }
+    .sig-preview .file-name {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      font-size: .65rem; color: #166534;
+      background: rgba(240,253,244,.85);
+      padding: 2px 6px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* existing-sig image inside slot */
+    .sig-existing {
+      display: none;
+      position: relative;
+      height: 100%;
+    }
+    .sig-existing img {
+      width: 100%; height: 100%; object-fit: contain; padding: 8px;
+    }
+    .sig-existing .ex-overlay {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 4px;
+      transition: background .2s;
+      pointer-events: none;
+    }
+    .sig-slot.existing:hover .ex-overlay { background: rgba(0,0,0,.45); }
+    .sig-existing .ex-label {
+      font-size: .78rem; font-weight: 700; color: #fff;
+      opacity: 0; transition: opacity .2s;
+    }
+    .sig-existing .ex-hint {
+      font-size: .68rem; color: rgba(255,255,255,.85);
+      opacity: 0; transition: opacity .2s;
+    }
+    .sig-slot.existing:hover .ex-label,
+    .sig-slot.existing:hover .ex-hint { opacity: 1; }
+    .sig-existing .ex-badge {
+      position: absolute; top: 6px; left: 6px;
+      background: #dcfce7; color: #166534;
+      font-size: .65rem; font-weight: 700;
+      padding: 2px 7px; border-radius: 99px;
+      pointer-events: none;
+    }
+
+    .sig-slot.has-file  .sig-placeholder { display: none; }
+    .sig-slot.has-file  .sig-preview     { display: block; }
+    .sig-slot.has-file  .sig-existing    { display: none; }
+    .sig-slot.existing  .sig-placeholder { display: none; }
+    .sig-slot.existing  .sig-existing    { display: block; }
+
+    .sig-err-msg { font-size: .78rem; color: var(--red); margin-top: 5px; display: none; }
+
+    .submit-row { margin-top: 24px; display: flex; gap: 10px; }
+    .submit-row .btn { flex: 1; justify-content: center; }
+
+    /* ── Spinner ── */
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2.5px solid rgba(255,255,255,.4);
+      border-top-color: #fff; border-radius: 50%;
+      animation: spin .7s linear infinite; display: none;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ══════════════════ MODAL ══════════════════ */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.45);
+      display: none; align-items: center; justify-content: center;
+      z-index: 100;
+      animation: fade-in .15s ease;
+    }
+    .modal-backdrop.show { display: flex; }
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+    .modal {
+      background: #fff; border-radius: 14px;
+      padding: 28px; width: 100%; max-width: 400px; margin: 16px;
+      box-shadow: 0 16px 48px rgba(0,0,0,.2);
+      animation: slide-up .18s ease;
+    }
+    @keyframes slide-up {
+      from { transform: translateY(12px); opacity: 0; }
+      to   { transform: translateY(0);   opacity: 1; }
+    }
+    .modal-icon { font-size: 2rem; margin-bottom: 10px; }
+    .modal h2 { font-size: 1.1rem; margin-bottom: 6px; }
+    .modal p  { font-size: .88rem; color: var(--gray-500); line-height: 1.5; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 22px; justify-content: flex-end; }
+
+    /* ══════════════════ TOAST ══════════════════ */
+    #toast {
+      position: fixed; bottom: 24px; right: 24px;
+      min-width: 270px; max-width: 360px;
+      padding: 13px 16px; border-radius: 10px;
+      font-size: .87rem; font-weight: 500;
+      box-shadow: 0 8px 24px rgba(0,0,0,.15);
+      display: none; align-items: flex-start; gap: 10px;
+      z-index: 999; animation: slide-in .22s ease;
+    }
+    @keyframes slide-in {
+      from { transform: translateY(14px); opacity: 0; }
+      to   { transform: translateY(0);   opacity: 1; }
+    }
+    #toast.success { background: #14532d; color: #fff; }
+    #toast.error   { background: #7f1d1d; color: #fff; }
+    #toast .t-icon  { font-size: 1rem; margin-top: 1px; flex-shrink: 0; }
+    #toast .t-body  { flex: 1; }
+    #toast .t-title { font-weight: 700; margin-bottom: 1px; }
+    #toast .t-msg   { opacity: .85; font-size: .8rem; line-height: 1.4; }
+
+    /* ══════════════════ CHECK SIG MODAL ══════════════════ */
+    .modal-lg { max-width: 560px; }
+    .check-drop {
+      border: 2px dashed var(--gray-200);
+      border-radius: 12px;
+      background: var(--gray-50);
+      aspect-ratio: 3/1.2;
+      position: relative;
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .check-drop:hover { border-color: var(--blue); background: var(--blue-l); }
+    .check-drop.drag-over { border-color: var(--blue); background: #dbeafe; }
+    .check-drop.has-file  { border-style: solid; border-color: #7e22ce; background: #faf5ff; }
+    .check-drop input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+    .check-drop-ph { text-align: center; pointer-events: none; }
+    .check-drop-ph svg { color: var(--gray-400); margin-bottom: 6px; }
+    .check-drop-ph p { font-size: .82rem; color: var(--gray-500); font-weight: 600; }
+    .check-drop-ph small { font-size: .72rem; color: var(--gray-400); }
+    .check-preview { display: none; position: relative; height: 100%; width: 100%; }
+    .check-preview img { width: 100%; height: 100%; object-fit: contain; padding: 10px; }
+    .check-preview .rm-btn {
+      position: absolute; top: 6px; right: 6px;
+      width: 22px; height: 22px;
+      background: var(--red); border-radius: 50%; border: none;
+      cursor: pointer; color: #fff; font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: all;
+    }
+    .check-drop.has-file .check-drop-ph { display: none; }
+    .check-drop.has-file .check-preview { display: block; }
+
+    /* score result cards */
+    .score-section { margin-top: 20px; }
+    .score-section h3 { font-size: .78rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px; }
+    .score-cards { display: flex; flex-direction: column; gap: 10px; }
+    .score-card {
+      border: 1.5px solid var(--gray-200);
+      border-radius: 10px;
+      padding: 14px 16px;
+      position: relative;
+    }
+    .score-card.valid   { border-color: #16a34a; background: #f0fdf4; }
+    .score-card.invalid { border-color: #ef4444; background: #fff1f2; }
+    .score-card-title { font-weight: 700; font-size: .88rem; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+    .score-card-title .verdict { font-size: .72rem; padding: 2px 8px; border-radius: 99px; font-weight: 700; }
+    .verdict.ok  { background: #dcfce7; color: #166534; }
+    .verdict.no  { background: #fee2e2; color: #991b1b; }
+    .score-metrics { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+
+    /* ── Siamese train panel ── */
+    .siamese-panel {
+      margin-top: 16px;
+      border: 1.5px solid #e9d5ff;
+      border-radius: 10px;
+      padding: 14px 16px;
+      background: #faf5ff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .siamese-panel .sp-info { flex: 1; }
+    .siamese-panel .sp-title { font-weight: 700; font-size: .88rem; color: #6b21a8; margin-bottom: 2px; }
+    .siamese-panel .sp-desc  { font-size: .78rem; color: #7e22ce; opacity: .8; }
+    .siamese-panel .sp-status { font-size: .75rem; color: var(--gray-500); margin-top: 4px; }
+    .btn-purple { background: #7e22ce; color: #fff; }
+    .btn-purple:hover:not(:disabled) { background: #6b21a8; }
+    .score-metric { text-align: center; }
+    .score-metric .m-val { font-size: 1.05rem; font-weight: 700; color: var(--gray-900); }
+    .score-metric .m-lbl { font-size: .65rem; color: var(--gray-500); margin-top: 1px; text-transform: uppercase; letter-spacing: .04em; }
+    .score-summary { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--gray-200); display: flex; align-items: center; justify-content: space-between; font-size: .82rem; color: var(--gray-500); }
+    .score-summary strong { color: var(--gray-900); }
+
+    /* ══════════════════ PAGES visibility ══════════════════ */
+    .page { display: none; }
+    .page.active { display: block; }
+
+    /* ══════════════════ LOADING SKELETON ══════════════════ */
+    .skeleton { background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; border-radius: 4px; }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+    .skel-row td > div { height: 14px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ── Topbar ── -->
+  <div class="topbar">
+    <div class="topbar-brand" onclick="goList()">
+      ✍️ Signature Validation
+    </div>
+    <div class="breadcrumb" id="breadcrumb"></div>
+    <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="goExtract()">
+      📄 Trích xuất chữ ký từ DO
+    </button>
+  </div>
+
+  <!-- ════════════════ PAGE: LIST ════════════════ -->
+  <div class="page active" id="page-list">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h1>Danh sách nhân viên</h1>
+          <p>Quản lý nhân viên và chữ ký mẫu</p>
+        </div>
+        <button class="btn btn-primary" onclick="goCreate()">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+          Thêm nhân viên
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="table-toolbar">
+          <div class="search-box">
+            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path stroke-linecap="round" d="M21 21l-4.35-4.35"/></svg>
+            <input type="text" id="searchInput" placeholder="Tìm theo MNV hoặc tên…" oninput="filterTable()" />
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="loadList()">
+            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0115-3.87M20 15a9 9 0 01-15 3.87"/></svg>
+            Tải lại
+          </button>
+        </div>
+
+        <div class="table-wrap">
+          <table id="empTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Mã NV</th>
+                <th>Họ và tên</th>
+                <th>Chữ ký mẫu</th>
+                <th>Ngày tạo</th>
+                <th>Hành động</th>
+              </tr>
+            </thead>
+            <tbody id="empTbody"></tbody>
+          </table>
+        </div>
+        <div class="table-meta" id="tableMeta"></div>
+
+        <!-- Siamese training panel -->
+        <div class="siamese-panel" id="siamesePanel">
+          <div class="sp-info">
+            <div class="sp-title">🧠 Siamese Neural Network</div>
+            <div class="sp-desc">Huấn luyện model từ chữ ký mẫu hiện có để tăng độ chính xác xác thực</div>
+            <div class="sp-status" id="siameseStatus">Đang kiểm tra trạng thái…</div>
+          </div>
+          <button class="btn btn-purple btn-sm" id="siameseTrainBtn" onclick="trainSiamese()">
+            <div class="spinner" id="siameseSpinner"></div>
+            <span id="siameseTrainLabel">Huấn luyện</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ PAGE: CREATE ════════════════ -->
+  <div class="page" id="page-create">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h1>Thêm nhân viên mới</h1>
+          <p>Nhập thông tin và đính kèm 2 chữ ký mẫu</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="steps" id="createSteps">
+          <div class="step active" id="cs1"><div class="step-dot">1</div><div class="step-label">Thông tin</div></div>
+          <div class="step"        id="cs2"><div class="step-dot">2</div><div class="step-label">Chữ ký</div></div>
+          <div class="step"        id="cs3"><div class="step-dot">3</div><div class="step-label">Hoàn tất</div></div>
+        </div>
+
+        <form id="createForm" novalidate>
+          <p class="section-label">Thông tin nhân viên</p>
+          <div class="field">
+            <label for="cCode">Mã nhân viên <span class="req">*</span></label>
+            <input type="text" id="cCode" placeholder="VD: NV001" autocomplete="off" oninput="syncCreateSteps()" />
+            <div class="field-err" id="cCodeErr">Vui lòng nhập mã nhân viên.</div>
+          </div>
+          <div class="field">
+            <label for="cName">Họ và tên <span class="req">*</span></label>
+            <input type="text" id="cName" placeholder="VD: Nguyễn Văn A" autocomplete="off" oninput="syncCreateSteps()" />
+            <div class="field-err" id="cNameErr">Vui lòng nhập họ và tên.</div>
+          </div>
+
+          <hr class="divider" />
+          <p class="section-label">Chữ ký mẫu (bắt buộc 2 chữ ký)</p>
+
+          <div class="sig-grid">
+            <div>
+              <div class="sig-slot" id="cSlot1" ondragover="onDragOver(event,'c',1)" ondragleave="onDragLeave('c',1)" ondrop="onDrop(event,'c',1)">
+                <input type="file" id="cFile1" accept="image/jpeg,image/png,image/webp,image/tiff" onchange="onFileChange('c',1)" />
+                <div class="sig-placeholder">
+                  <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                  <span class="slot-title">Chữ ký lần 1</span>
+                  <span class="slot-hint">Nhấn hoặc kéo thả ảnh</span>
+                </div>
+                <div class="sig-preview" id="cPreview1">
+                  <button type="button" class="rm-btn" onclick="removeFile(event,'c',1)">×</button>
+                  <img id="cImg1" src="" alt="sig1" />
+                  <div class="file-name" id="cFName1"></div>
+                </div>
+              </div>
+              <div class="sig-err-msg" id="cSigErr1">Vui lòng chọn chữ ký lần 1.</div>
+            </div>
+            <div>
+              <div class="sig-slot" id="cSlot2" ondragover="onDragOver(event,'c',2)" ondragleave="onDragLeave('c',2)" ondrop="onDrop(event,'c',2)">
+                <input type="file" id="cFile2" accept="image/jpeg,image/png,image/webp,image/tiff" onchange="onFileChange('c',2)" />
+                <div class="sig-placeholder">
+                  <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                  <span class="slot-title">Chữ ký lần 2</span>
+                  <span class="slot-hint">Nhấn hoặc kéo thả ảnh</span>
+                </div>
+                <div class="sig-preview" id="cPreview2">
+                  <button type="button" class="rm-btn" onclick="removeFile(event,'c',2)">×</button>
+                  <img id="cImg2" src="" alt="sig2" />
+                  <div class="file-name" id="cFName2"></div>
+                </div>
+              </div>
+              <div class="sig-err-msg" id="cSigErr2">Vui lòng chọn chữ ký lần 2.</div>
+            </div>
+          </div>
+
+          <div class="submit-row">
+            <button type="button" class="btn btn-secondary" onclick="goList()">Hủy</button>
+            <button type="submit" class="btn btn-primary" id="cSubmitBtn">
+              <div class="spinner" id="cSpinner"></div>
+              <span id="cSubmitLabel">Tạo nhân viên</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ PAGE: EDIT ════════════════ -->
+  <div class="page" id="page-edit">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h1>Chỉnh sửa nhân viên</h1>
+          <p id="editSubtitle">Cập nhật thông tin và chữ ký mẫu</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="steps">
+          <div class="step active" id="es1"><div class="step-dot">1</div><div class="step-label">Thông tin</div></div>
+          <div class="step"        id="es2"><div class="step-dot">2</div><div class="step-label">Chữ ký</div></div>
+          <div class="step"        id="es3"><div class="step-dot">3</div><div class="step-label">Hoàn tất</div></div>
+        </div>
+
+        <form id="editForm" novalidate>
+          <p class="section-label">Thông tin nhân viên</p>
+          <div class="field">
+            <label>Mã nhân viên</label>
+            <input type="text" id="eCode" disabled />
+          </div>
+          <div class="field">
+            <label for="eName">Họ và tên <span class="req">*</span></label>
+            <input type="text" id="eName" placeholder="VD: Nguyễn Văn A" autocomplete="off" oninput="syncEditSteps()" />
+            <div class="field-err" id="eNameErr">Vui lòng nhập họ và tên.</div>
+          </div>
+
+          <hr class="divider" />
+          <p class="section-label">Chữ ký mẫu — thêm mới hoặc giữ nguyên</p>
+
+          <div class="sig-grid">
+            <!-- Edit slot 1 -->
+            <div>
+              <div class="sig-slot" id="eSlot1" ondragover="onDragOver(event,'e',1)" ondragleave="onDragLeave('e',1)" ondrop="onDrop(event,'e',1)">
+                <input type="file" id="eFile1" accept="image/jpeg,image/png,image/webp,image/tiff" onchange="onFileChange('e',1)" />
+                <div class="sig-placeholder">
+                  <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                  <span class="slot-title">Chữ ký lần 1</span>
+                  <span class="slot-hint">Nhấn hoặc kéo thả ảnh</span>
+                </div>
+                <!-- existing: shows real image from server -->
+                <div class="sig-existing" id="eExist1">
+                  <span class="ex-badge">✓ Chữ ký lần 1</span>
+                  <img id="eExistImg1" src="" alt="Chữ ký lần 1" />
+                  <div class="ex-overlay">
+                    <span class="ex-label">🔄 Thay thế</span>
+                    <span class="ex-hint">Nhấn hoặc kéo thả ảnh mới</span>
+                  </div>
+                </div>
+                <div class="sig-preview" id="ePreview1">
+                  <button type="button" class="rm-btn" onclick="removeFile(event,'e',1)">×</button>
+                  <img id="eImg1" src="" alt="sig1" />
+                  <div class="file-name" id="eFName1"></div>
+                </div>
+              </div>
+              <div class="sig-err-msg" id="eSigErr1"></div>
+            </div>
+            <!-- Edit slot 2 -->
+            <div>
+              <div class="sig-slot" id="eSlot2" ondragover="onDragOver(event,'e',2)" ondragleave="onDragLeave('e',2)" ondrop="onDrop(event,'e',2)">
+                <input type="file" id="eFile2" accept="image/jpeg,image/png,image/webp,image/tiff" onchange="onFileChange('e',2)" />
+                <div class="sig-placeholder">
+                  <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+                  <span class="slot-title">Chữ ký lần 2</span>
+                  <span class="slot-hint">Nhấn hoặc kéo thả ảnh</span>
+                </div>
+                <div class="sig-existing" id="eExist2">
+                  <span class="ex-badge">✓ Chữ ký lần 2</span>
+                  <img id="eExistImg2" src="" alt="Chữ ký lần 2" />
+                  <div class="ex-overlay">
+                    <span class="ex-label">🔄 Thay thế</span>
+                    <span class="ex-hint">Nhấn hoặc kéo thả ảnh mới</span>
+                  </div>
+                </div>
+                <div class="sig-preview" id="ePreview2">
+                  <button type="button" class="rm-btn" onclick="removeFile(event,'e',2)">×</button>
+                  <img id="eImg2" src="" alt="sig2" />
+                  <div class="file-name" id="eFName2"></div>
+                </div>
+              </div>
+              <div class="sig-err-msg" id="eSigErr2"></div>
+            </div>
+          </div>
+
+          <div class="submit-row">
+            <button type="button" class="btn btn-secondary" onclick="goList()">Hủy</button>
+            <button type="submit" class="btn btn-primary" id="eSubmitBtn">
+              <div class="spinner" id="eSpinner"></div>
+              <span id="eSubmitLabel">Lưu thay đổi</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ PAGE: EXTRACT SIGNATURES ════════════════ -->
+  <div class="page" id="page-extract">
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h1>Trích xuất chữ ký từ phiếu giao hàng</h1>
+          <p>Upload file PDF phiếu DO — hệ thống sẽ tự động tìm và cắt chữ ký "Khách hàng đã nhận đủ hàng"</p>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="goList()" style="white-space:nowrap">← Quay lại</button>
+      </div>
+      <div class="card-body" style="padding:28px">
+
+        <!-- Drop zone -->
+        <div id="extractDrop"
+             style="border:2px dashed var(--gray-200);border-radius:12px;padding:40px 24px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s"
+             onclick="document.getElementById('extractFile').click()"
+             ondragover="extractDragOver(event)"
+             ondragleave="extractDragLeave()"
+             ondrop="extractDrop_(event)">
+          <input type="file" id="extractFile" accept="application/pdf" style="display:none" onchange="onExtractFileChange()" />
+          <div id="extractDropPh">
+            <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="color:var(--gray-400);margin-bottom:10px"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+            <p style="font-size:.95rem;color:var(--gray-700);font-weight:600">Kéo thả hoặc nhấn để chọn file PDF</p>
+            <small style="color:var(--gray-400)">Chỉ hỗ trợ file PDF phiếu giao nhận hàng</small>
+          </div>
+          <div id="extractFileInfo" style="display:none">
+            <svg width="32" height="32" fill="none" stroke="#ef4444" stroke-width="1.5" viewBox="0 0 24 24" style="margin-bottom:8px"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+            <p style="font-size:.9rem;font-weight:600;color:var(--gray-700)" id="extractFileName"></p>
+            <small style="color:var(--gray-400)" id="extractFileSize"></small>
+            <button type="button" onclick="clearExtractFile(event)" style="display:block;margin:8px auto 0;background:none;border:none;cursor:pointer;font-size:.8rem;color:var(--red);text-decoration:underline">Xóa file</button>
+          </div>
+        </div>
+
+        <!-- Action row -->
+        <div style="display:flex;justify-content:flex-end;margin-top:18px">
+          <button class="btn btn-primary" id="extractBtn" onclick="runExtract()" disabled>
+            <div class="spinner" id="extractSpinner" style="border-color:rgba(255,255,255,.4);border-top-color:#fff;display:none"></div>
+            <span id="extractBtnLabel">🔍 Trích xuất chữ ký</span>
+          </button>
+        </div>
+
+        <!-- Results -->
+        <div id="extractResults" style="display:none;margin-top:28px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <h3 style="font-size:.85rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--gray-500)">
+              Kết quả — <span id="extractCount"></span>
+            </h3>
+            <button class="btn btn-secondary btn-sm" onclick="downloadAllSigs()">⬇ Tải tất cả</button>
+          </div>
+          <div id="extractGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div><!-- /app-shell -->
+
+<!-- ════════════ CONFIRM MODAL ════════════ -->
+<div class="modal-backdrop" id="confirmModal">
+  <div class="modal">
+    <div class="modal-icon">🗑️</div>
+    <h2 id="modalTitle">Xác nhận xóa</h2>
+    <p id="modalBody"></p>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Hủy</button>
+      <button class="btn btn-danger"    id="modalConfirmBtn">Xóa</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ CHECK SIGNATURE MODAL ════════════ -->
+<div class="modal-backdrop" id="checkModal">
+  <div class="modal modal-lg">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <h2 style="font-size:1.05rem;margin-bottom:2px">Kiểm tra chữ ký</h2>
+        <p style="font-size:.82rem;color:var(--gray-500)" id="checkSubtitle"></p>
+      </div>
+      <button onclick="closeCheckModal()" style="background:none;border:none;cursor:pointer;font-size:1.3rem;color:var(--gray-400);padding:4px">✕</button>
+    </div>
+
+    <div class="check-drop" id="checkDrop"
+         ondragover="checkDragOver(event)" ondragleave="checkDragLeave()" ondrop="checkDrop_(event)">
+      <input type="file" id="checkFile" accept="image/jpeg,image/png,image/webp,image/tiff" onchange="onCheckFileChange()" />
+      <div class="check-drop-ph">
+        <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
+        <p>Upload ảnh chữ ký cần kiểm tra</p>
+        <small>Nhấn hoặc kéo thả — JPEG, PNG, WebP, TIFF</small>
+      </div>
+      <div class="check-preview" id="checkPreview">
+        <button type="button" class="rm-btn" onclick="clearCheckFile(event)">×</button>
+        <img id="checkImg" src="" alt="preview" />
+      </div>
+    </div>
+
+    <div id="checkResults" style="display:none">
+      <div class="score-section">
+        <h3>Kết quả so sánh</h3>
+        <div class="score-cards" id="scoreCards"></div>
+        <div class="score-summary" id="scoreSummary"></div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px;margin-top:18px;justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="closeCheckModal()">Đóng</button>
+      <button class="btn btn-primary" id="checkSubmitBtn" onclick="submitCheck()">
+        <div class="spinner" id="checkSpinner" style="border-color:rgba(255,255,255,.4);border-top-color:#fff"></div>
+        <span id="checkSubmitLabel">Kiểm tra</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ TOAST ════════════ -->
+<div id="toast">
+  <div class="t-icon" id="tIcon"></div>
+  <div class="t-body">
+    <div class="t-title" id="tTitle"></div>
+    <div class="t-msg"   id="tMsg"></div>
+  </div>
+</div>
+
+<script>
+const API = '';   // same origin
+
+/* ═══════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════ */
+let allEmployees = [];         // full list from server
+let editCode     = null;       // employee_code being edited
+let editSigs     = [];         // existing signatures for edit page
+
+// file state: { c: {1: File|null, 2: File|null}, e: {1:…, 2:…} }
+const files = { c: { 1: null, 2: null }, e: { 1: null, 2: null } };
+
+/* ═══════════════════════════════════════════
+   ROUTING
+═══════════════════════════════════════════ */
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+}
+
+function goList() {
+  setBreadcrumb([]);
+  showPage('list');
+  loadList();
+}
+
+function goCreate() {
+  setBreadcrumb([
+    { label: 'Danh sách', action: 'goList()' },
+    { label: 'Thêm nhân viên' },
+  ]);
+  resetCreateForm();
+  showPage('create');
+}
+
+function goEdit(code) {
+  editCode = code;
+  setBreadcrumb([
+    { label: 'Danh sách', action: 'goList()' },
+    { label: `Chỉnh sửa: ${code}` },
+  ]);
+  loadEditForm(code);
+  showPage('edit');
+}
+
+/* ═══════════════════════════════════════════
+   BREADCRUMB
+═══════════════════════════════════════════ */
+function setBreadcrumb(items) {
+  const bc = document.getElementById('breadcrumb');
+  if (!items.length) { bc.innerHTML = ''; return; }
+  bc.innerHTML = items.map((it, i) => {
+    const isLast = i === items.length - 1;
+    const html = isLast
+      ? `<span>${it.label}</span>`
+      : `<span class="crumb-link" onclick="${it.action}">${it.label}</span>`;
+    return i === 0 ? html : `<span class="sep">›</span>${html}`;
+  }).join('');
+}
+
+/* ═══════════════════════════════════════════
+   LIST PAGE
+═══════════════════════════════════════════ */
+async function loadList() {
+  renderSkeleton();
+  try {
+    const res = await fetch(`${API}/employees?limit=200`);
+    allEmployees = await res.json();
+    renderTable(allEmployees);
+  } catch {
+    showToast('error', 'Lỗi tải dữ liệu', 'Không thể kết nối tới server.');
+    renderTable([]);
+  }
+}
+
+function renderSkeleton() {
+  const tbody = document.getElementById('empTbody');
+  tbody.innerHTML = Array(4).fill(0).map(() => `
+    <tr class="skel-row">
+      <td><div class="skeleton" style="width:20px"></div></td>
+      <td><div class="skeleton" style="width:70px"></div></td>
+      <td><div class="skeleton" style="width:140px"></div></td>
+      <td><div class="skeleton" style="width:60px"></div></td>
+      <td><div class="skeleton" style="width:90px"></div></td>
+      <td><div class="skeleton" style="width:100px"></div></td>
+    </tr>`).join('');
+  document.getElementById('tableMeta').textContent = '';
+}
+
+function renderTable(rows) {
+  const tbody = document.getElementById('empTbody');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6">
+      <div class="empty-state">
+        <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
+        <p>Chưa có nhân viên nào. <span class="crumb-link" onclick="goCreate()">Thêm ngay</span></p>
+      </div>
+    </td></tr>`;
+    document.getElementById('tableMeta').textContent = '';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((e, i) => {
+    const hasSig = e.signature_count >= 2;
+    const badge  = hasSig
+      ? `<span class="badge badge-sig">✓ ${e.signature_count} chữ ký</span>`
+      : `<span class="badge badge-nosig">⚠ ${e.signature_count}/2</span>`;
+    const date = new Date(e.created_at).toLocaleDateString('vi-VN');
+    return `<tr>
+      <td style="color:var(--gray-400);font-size:.8rem">${i + 1}</td>
+      <td><strong>${esc(e.employee_code)}</strong></td>
+      <td>${esc(e.full_name)}</td>
+      <td>${badge}</td>
+      <td style="color:var(--gray-500);font-size:.82rem">${date}</td>
+      <td>
+        <div class="actions-cell">
+          <button class="btn-icon check" onclick="openCheckModal('${esc(e.employee_code)}','${esc(e.full_name)}')" ${hasSig ? '' : 'disabled title="Cần có đủ 2 chữ ký mẫu"'}>
+            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Kiểm tra
+          </button>
+          <button class="btn-icon edit" onclick="goEdit('${esc(e.employee_code)}')">
+            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/></svg>
+            Sửa
+          </button>
+          <button class="btn-icon delete" onclick="confirmDelete('${esc(e.employee_code)}','${esc(e.full_name)}')">
+            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+            Xóa
+          </button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('tableMeta').textContent =
+    `Hiển thị ${rows.length} / ${allEmployees.length} nhân viên`;
+}
+
+function filterTable() {
+  const q = document.getElementById('searchInput').value.trim().toLowerCase();
+  if (!q) { renderTable(allEmployees); return; }
+  const filtered = allEmployees.filter(e =>
+    e.employee_code.toLowerCase().includes(q) ||
+    e.full_name.toLowerCase().includes(q)
+  );
+  renderTable(filtered);
+}
+
+/* ═══════════════════════════════════════════
+   DELETE
+═══════════════════════════════════════════ */
+let _deletePending = null;
+
+function confirmDelete(code, name) {
+  _deletePending = code;
+  document.getElementById('modalBody').textContent =
+    `Bạn có chắc muốn xóa nhân viên "${name}" (${code})? Hành động này không thể hoàn tác.`;
+  document.getElementById('confirmModal').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('confirmModal').classList.remove('show');
+  _deletePending = null;
+}
+
+document.getElementById('modalConfirmBtn').onclick = async () => {
+  if (!_deletePending) return;
+  const code = _deletePending;
+  closeModal();
+  try {
+    const res = await fetch(`${API}/employees/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+    showToast('success', 'Đã xóa', `Nhân viên ${code} đã được xóa.`);
+    loadList();
+  } catch (err) {
+    showToast('error', 'Lỗi xóa', err.message);
+  }
+};
+
+// Close modal on backdrop click
+document.getElementById('confirmModal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+/* ═══════════════════════════════════════════
+   CREATE FORM
+═══════════════════════════════════════════ */
+function resetCreateForm() {
+  document.getElementById('cCode').value = '';
+  document.getElementById('cName').value = '';
+  ['cCode','cName'].forEach(id => {
+    document.getElementById(id).classList.remove('err');
+    document.getElementById(id + 'Err').style.display = 'none';
+  });
+  for (const s of [1,2]) removeFile({ stopPropagation:()=>{} }, 'c', s);
+  ['cSigErr1','cSigErr2'].forEach(id => document.getElementById(id).style.display = 'none');
+  setStep('cs',1,'active'); setStep('cs',2,''); setStep('cs',3,'');
+}
+
+function syncCreateSteps() {
+  const code = document.getElementById('cCode').value.trim();
+  const name = document.getElementById('cName').value.trim();
+  const hasInfo = code && name;
+  const hasSigs = files.c[1] && files.c[2];
+  setStep('cs',1, hasInfo ? 'done':'active');
+  setStep('cs',2, hasSigs ? 'done' : (hasInfo ? 'active':''));
+  setStep('cs',3,'');
+}
+
+document.getElementById('createForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const code = document.getElementById('cCode').value.trim();
+  const name = document.getElementById('cName').value.trim();
+  let ok = true;
+
+  if (!code) { setFieldErr('cCode','cCodeErr',true); ok=false; } else setFieldErr('cCode','cCodeErr',false);
+  if (!name) { setFieldErr('cName','cNameErr',true); ok=false; } else setFieldErr('cName','cNameErr',false);
+  for (const s of [1,2]) {
+    if (!files.c[s]) {
+      document.getElementById('cSlot'+s).classList.add('err-slot');
+      document.getElementById('cSigErr'+s).style.display = 'block';
+      ok = false;
+    }
+  }
+  if (!ok) return;
+
+  setLoading('c', true);
+  try {
+    const empRes = await fetch(`${API}/employees`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employee_code: code, full_name: name }),
+    });
+    if (!empRes.ok) {
+      const err = await empRes.json().catch(()=>({}));
+      throw new Error(err.detail || `Lỗi tạo nhân viên (${empRes.status})`);
+    }
+
+    for (const s of [1,2]) {
+      const fd = new FormData();
+      fd.append('file', files.c[s]);
+      const r = await fetch(`${API}/employees/${encodeURIComponent(code)}/signatures`, { method:'POST', body:fd });
+      if (!r.ok) {
+        const err = await r.json().catch(()=>({}));
+        throw new Error(err.detail || `Lỗi upload chữ ký ${s}`);
+      }
+    }
+
+    setStep('cs',3,'done');
+    showToast('success','Tạo thành công!', `Nhân viên ${name} (${code}) đã được thêm.`);
+    goList();
+  } catch(err) {
+    showToast('error','Có lỗi xảy ra', err.message);
+  } finally {
+    setLoading('c', false);
+  }
+});
+
+/* ═══════════════════════════════════════════
+   EDIT FORM
+═══════════════════════════════════════════ */
+async function loadEditForm(code) {
+  // reset file slots
+  for (const s of [1,2]) removeFile({ stopPropagation:()=>{} }, 'e', s);
+
+  document.getElementById('eCode').value = code;
+  document.getElementById('eName').value = '';
+  document.getElementById('eNameErr').style.display = 'none';
+  document.getElementById('eName').classList.remove('err');
+  document.getElementById('editSubtitle').textContent = `Mã NV: ${code}`;
+  setStep('es',1,'active'); setStep('es',2,''); setStep('es',3,'');
+
+  // reset existing indicators
+  for (const s of [1,2]) {
+    const existEl = document.getElementById('eExist'+s);
+    const imgEl   = document.getElementById('eExistImg'+s);
+    existEl.style.display = 'none';
+    imgEl.src = '';
+    document.getElementById('eSlot'+s).classList.remove('existing');
+    document.getElementById('eSigErr'+s).style.display = 'none';
+    document.getElementById('eSigErr'+s).textContent = '';
+  }
+
+  try {
+    const [empRes, sigRes] = await Promise.all([
+      fetch(`${API}/employees/${encodeURIComponent(code)}`),
+      fetch(`${API}/employees/${encodeURIComponent(code)}/signatures`),
+    ]);
+    const emp  = await empRes.json();
+    editSigs   = await sigRes.json();   // [{id, order, …}, …]
+
+    document.getElementById('eName').value = emp.full_name;
+
+    // Show existing sig images
+    for (const s of [1,2]) {
+      const sig = editSigs.find(sg => sg.order === s);
+      if (sig) {
+        const imgEl = document.getElementById('eExistImg'+s);
+        // Load actual image from server; add cache-buster to avoid stale after replace
+        imgEl.src = `${API}/employees/${encodeURIComponent(code)}/signatures/${sig.id}/image?t=${Date.now()}`;
+        document.getElementById('eExist'+s).style.display = 'block';
+        document.getElementById('eSlot'+s).classList.add('existing');
+      }
+    }
+    syncEditSteps();
+  } catch {
+    showToast('error','Lỗi tải dữ liệu','Không thể tải thông tin nhân viên.');
+  }
+}
+
+function syncEditSteps() {
+  const name = document.getElementById('eName').value.trim();
+  setStep('es',1, name ? 'done':'active');
+  setStep('es',2, 'active');
+  setStep('es',3,'');
+}
+
+document.getElementById('editForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const code = editCode;
+  const name = document.getElementById('eName').value.trim();
+  if (!name) { setFieldErr('eName','eNameErr',true); return; }
+  setFieldErr('eName','eNameErr',false);
+
+  // Determine which slots need uploading
+  const slotsToUpload = [1,2].filter(s => files.e[s]);
+
+  // For slots where there's an existing sig and a NEW file: delete old first
+  // For slots where there's no existing sig and no new file: warn if < 2 total
+  const existingOrders = editSigs.map(sg => sg.order);
+  const willHaveSig = [1,2].map(s =>
+    files.e[s] !== null || existingOrders.includes(s)
+  );
+  if (!willHaveSig[0] || !willHaveSig[1]) {
+    for (const s of [1,2]) {
+      if (!willHaveSig[s-1]) {
+        document.getElementById('eSlot'+s).classList.add('err-slot');
+        document.getElementById('eSigErr'+s).textContent = `Vui lòng chọn chữ ký lần ${s}.`;
+        document.getElementById('eSigErr'+s).style.display = 'block';
+      }
+    }
+    return;
+  }
+
+  setLoading('e', true);
+  try {
+    // 1. Update name
+    await fetch(`${API}/employees/${encodeURIComponent(code)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: name }),
+    }).then(r => { if (!r.ok) throw new Error(`Lỗi cập nhật tên (${r.status})`); });
+
+    // 2. For each new file: delete existing same-order sig then upload
+    for (const s of slotsToUpload) {
+      const oldSig = editSigs.find(sg => sg.order === s);
+      if (oldSig) {
+        await fetch(`${API}/employees/${encodeURIComponent(code)}/signatures/${oldSig.id}`, {
+          method: 'DELETE',
+        });
+      }
+      const fd = new FormData();
+      fd.append('file', files.e[s]);
+      const r = await fetch(`${API}/employees/${encodeURIComponent(code)}/signatures`, { method:'POST', body:fd });
+      if (!r.ok) {
+        const err = await r.json().catch(()=>({}));
+        throw new Error(err.detail || `Lỗi upload chữ ký ${s}`);
+      }
+    }
+
+    setStep('es',3,'done');
+    showToast('success','Lưu thành công!', `Thông tin nhân viên ${code} đã được cập nhật.`);
+    goList();
+  } catch(err) {
+    showToast('error','Có lỗi xảy ra', err.message);
+  } finally {
+    setLoading('e', false);
+  }
+});
+
+/* ═══════════════════════════════════════════
+   FILE HANDLING (shared)
+═══════════════════════════════════════════ */
+function onFileChange(ctx, slot) {
+  const input = document.getElementById(ctx + 'File' + slot);
+  setFile(ctx, slot, input.files[0] || null);
+}
+
+function setFile(ctx, slot, file) {
+  if (!file) return;
+  files[ctx][slot] = file;
+
+  const url = URL.createObjectURL(file);
+  document.getElementById(ctx + 'Img' + slot).src = url;
+  document.getElementById(ctx + 'FName' + slot).textContent = file.name;
+
+  const slotEl = document.getElementById(ctx + 'Slot' + slot);
+  slotEl.classList.add('has-file');
+  slotEl.classList.remove('err-slot', 'existing');
+
+  if (ctx === 'e') {
+    document.getElementById('eExist'+slot).style.display = 'none';
+  }
+
+  // hide error
+  const errEl = document.getElementById(ctx === 'c' ? `cSigErr${slot}` : `eSigErr${slot}`);
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+  ctx === 'c' ? syncCreateSteps() : syncEditSteps();
+}
+
+function removeFile(e, ctx, slot) {
+  e.stopPropagation();
+  files[ctx][slot] = null;
+  const input = document.getElementById(ctx + 'File' + slot);
+  if (input) input.value = '';
+  const img = document.getElementById(ctx + 'Img' + slot);
+  if (img) { URL.revokeObjectURL(img.src); img.src = ''; }
+
+  const slotEl = document.getElementById(ctx + 'Slot' + slot);
+  slotEl.classList.remove('has-file');
+
+  // restore existing indicator on edit page
+  if (ctx === 'e') {
+    const exists = editSigs.some(sg => sg.order === slot);
+    if (exists) {
+      document.getElementById('eExist'+slot).style.display = 'flex';
+      slotEl.classList.add('existing');
+    }
+    syncEditSteps();
+  } else {
+    syncCreateSteps();
+  }
+}
+
+function onDragOver(ev, ctx, slot) {
+  ev.preventDefault();
+  document.getElementById(ctx+'Slot'+slot).classList.add('drag-over');
+}
+function onDragLeave(ctx, slot) {
+  document.getElementById(ctx+'Slot'+slot).classList.remove('drag-over');
+}
+function onDrop(ev, ctx, slot) {
+  ev.preventDefault();
+  document.getElementById(ctx+'Slot'+slot).classList.remove('drag-over');
+  const file = ev.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) {
+    setFile(ctx, slot, file);
+  } else {
+    showToast('error','Định dạng không hỗ trợ','Chỉ chấp nhận JPEG, PNG, WebP, TIFF.');
+  }
+}
+
+/* ═══════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════ */
+function setStep(prefix, n, state) {
+  const el = document.getElementById(prefix + n);
+  if (!el) return;
+  el.classList.remove('active','done');
+  if (state === 'active') el.classList.add('active');
+  if (state === 'done')   el.classList.add('done');
+}
+
+function setFieldErr(inputId, errId, show) {
+  document.getElementById(inputId).classList.toggle('err', show);
+  document.getElementById(errId).style.display = show ? 'block' : 'none';
+}
+
+function setLoading(ctx, loading) {
+  const prefix = ctx === 'c' ? 'c' : 'e';
+  document.getElementById(prefix+'SubmitBtn').disabled = loading;
+  document.getElementById(prefix+'Spinner').style.display  = loading ? 'block' : 'none';
+  document.getElementById(prefix+'SubmitLabel').textContent = loading
+    ? 'Đang xử lý…'
+    : (ctx === 'c' ? 'Tạo nhân viên' : 'Lưu thay đổi');
+}
+
+function esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+let _toastTimer;
+function showToast(type, title, msg) {
+  const toast = document.getElementById('toast');
+  document.getElementById('tIcon').textContent  = type === 'success' ? '✓' : '✕';
+  document.getElementById('tTitle').textContent = title;
+  document.getElementById('tMsg').textContent   = msg;
+  toast.className = type;
+  toast.style.display = 'flex';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 5000);
+}
+
+/* ═══════════════════════════════════════════
+   CHECK SIGNATURE MODAL
+═══════════════════════════════════════════ */
+let _checkCode = null;
+let _checkFile = null;
+
+function openCheckModal(code, name) {
+  _checkCode = code;
+  _checkFile = null;
+  document.getElementById('checkSubtitle').textContent = `${name} — ${code}`;
+  document.getElementById('checkDrop').classList.remove('has-file','drag-over');
+  document.getElementById('checkFile').value = '';
+  document.getElementById('checkImg').src = '';
+  document.getElementById('checkResults').style.display = 'none';
+  document.getElementById('scoreCards').innerHTML = '';
+  document.getElementById('scoreSummary').innerHTML = '';
+  document.getElementById('checkSubmitBtn').disabled = true;
+  document.getElementById('checkSubmitLabel').textContent = 'Kiểm tra';
+  document.getElementById('checkSpinner').style.display = 'none';
+  document.getElementById('checkModal').classList.add('show');
+}
+
+function closeCheckModal() {
+  document.getElementById('checkModal').classList.remove('show');
+  if (_checkFile) { URL.revokeObjectURL(document.getElementById('checkImg').src); }
+  _checkCode = null; _checkFile = null;
+}
+
+document.getElementById('checkModal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeCheckModal();
+});
+
+function setCheckFile(file) {
+  if (!file) return;
+  _checkFile = file;
+  const url = URL.createObjectURL(file);
+  document.getElementById('checkImg').src = url;
+  document.getElementById('checkDrop').classList.add('has-file');
+  document.getElementById('checkResults').style.display = 'none';
+  document.getElementById('checkSubmitBtn').disabled = false;
+}
+
+function onCheckFileChange() {
+  const f = document.getElementById('checkFile').files[0];
+  if (f) setCheckFile(f);
+}
+
+function clearCheckFile(e) {
+  e.stopPropagation();
+  _checkFile = null;
+  document.getElementById('checkFile').value = '';
+  URL.revokeObjectURL(document.getElementById('checkImg').src);
+  document.getElementById('checkImg').src = '';
+  document.getElementById('checkDrop').classList.remove('has-file');
+  document.getElementById('checkResults').style.display = 'none';
+  document.getElementById('checkSubmitBtn').disabled = true;
+}
+
+function checkDragOver(ev) {
+  ev.preventDefault();
+  document.getElementById('checkDrop').classList.add('drag-over');
+}
+function checkDragLeave() {
+  document.getElementById('checkDrop').classList.remove('drag-over');
+}
+function checkDrop_(ev) {
+  ev.preventDefault();
+  document.getElementById('checkDrop').classList.remove('drag-over');
+  const f = ev.dataTransfer.files[0];
+  if (f && f.type.startsWith('image/')) setCheckFile(f);
+  else showToast('error','Định dạng không hỗ trợ','Chỉ chấp nhận JPEG, PNG, WebP, TIFF.');
+}
+
+async function submitCheck() {
+  if (!_checkFile || !_checkCode) return;
+
+  document.getElementById('checkSubmitBtn').disabled = true;
+  document.getElementById('checkSpinner').style.display = 'block';
+  document.getElementById('checkSubmitLabel').textContent = 'Đang xử lý…';
+  document.getElementById('checkResults').style.display = 'none';
+
+  try {
+    const fd = new FormData();
+    fd.append('employee_code', _checkCode);
+    fd.append('file', _checkFile);
+
+    const res = await fetch(`${API}/validate`, { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({}));
+      throw new Error(err.detail || `Lỗi ${res.status}`);
+    }
+    const data = await res.json();
+    renderCheckResults(data);
+  } catch (err) {
+    showToast('error', 'Kiểm tra thất bại', err.message);
+  } finally {
+    document.getElementById('checkSubmitBtn').disabled = false;
+    document.getElementById('checkSpinner').style.display = 'none';
+    document.getElementById('checkSubmitLabel').textContent = 'Kiểm tra lại';
+  }
+}
+
+function renderCheckResults(data) {
+  const perRef = data.detail?.per_reference || [];
+  const threshold = data.threshold_used;
+
+  const cards = perRef.map((ref, i) => {
+    const overall = ref.overall;
+    const isValid = overall >= threshold;
+    const pct = (v) => (v * 100).toFixed(1) + '%';
+    return `
+      <div class="score-card ${isValid ? 'valid' : 'invalid'}">
+        <div class="score-card-title">
+          Chữ ký mẫu ${i + 1}
+          <span class="verdict ${isValid ? 'ok' : 'no'}">${isValid ? '✓ Khớp' : '✗ Không khớp'}</span>
+        </div>
+        <div class="score-metrics">
+          <div class="score-metric">
+            <div class="m-val">${pct(overall)}</div>
+            <div class="m-lbl">Tổng hợp</div>
+          </div>
+          <div class="score-metric" title="Siamese Neural Network — học trực tiếp từ chữ ký mẫu">
+            <div class="m-val" style="color:#6b21a8">${pct(ref.siamese ?? 0)}</div>
+            <div class="m-lbl">Siamese</div>
+          </div>
+          <div class="score-metric" title="EfficientNet-B0 deep feature cosine similarity">
+            <div class="m-val" style="color:#7e22ce">${pct(ref.deep ?? 0)}</div>
+            <div class="m-lbl">Deep CNN</div>
+          </div>
+          <div class="score-metric">
+            <div class="m-val">${pct(ref.ssim)}</div>
+            <div class="m-lbl">SSIM</div>
+          </div>
+          <div class="score-metric">
+            <div class="m-val">${pct(ref.orb)}</div>
+            <div class="m-lbl">ORB</div>
+          </div>
+          <div class="score-metric">
+            <div class="m-val">${pct(ref.contour)}</div>
+            <div class="m-lbl">Contour</div>
+          </div>
+        </div>
+      </div>`;
+  });
+
+  document.getElementById('scoreCards').innerHTML = cards.join('');
+
+  const overallPct = (data.overall_score * 100).toFixed(1) + '%';
+  const threshPct  = (threshold * 100).toFixed(1) + '%';
+  const bestValid  = data.is_valid;
+  document.getElementById('scoreSummary').innerHTML = `
+    <span>Ngưỡng chấp nhận: <strong>${threshPct}</strong></span>
+    <span>Điểm tốt nhất: <strong style="color:${bestValid ? 'var(--green)' : 'var(--red)'}">${overallPct}</strong>
+      — <strong style="color:${bestValid ? 'var(--green)' : 'var(--red)'}">${bestValid ? 'HỢP LỆ' : 'KHÔNG HỢP LỆ'}</strong>
+    </span>`;
+
+  document.getElementById('checkResults').style.display = 'block';
+}
+
+/* ═══════════════════════════════════════════
+   SIAMESE PANEL
+═══════════════════════════════════════════ */
+async function loadSiameseStatus() {
+  try {
+    const res  = await fetch(`${API}/siamese/status`);
+    const data = await res.json();
+    const el   = document.getElementById('siameseStatus');
+    if (data.model_available) {
+      const dt = data.last_trained
+        ? new Date(data.last_trained).toLocaleString('vi-VN')
+        : 'không rõ';
+      el.textContent =
+        `✓ Model đã huấn luyện — lần cuối: ${dt} ` +
+        `(${data.n_employees_at_training ?? '?'} NV, ${data.n_pairs_at_training ?? '?'} cặp)`;
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = '⚠ Chưa có model — nhấn Huấn luyện để bắt đầu';
+      el.style.color = 'var(--gray-500)';
+    }
+  } catch {
+    document.getElementById('siameseStatus').textContent = 'Không thể lấy trạng thái';
+  }
+}
+
+async function trainSiamese() {
+  const btn    = document.getElementById('siameseTrainBtn');
+  const spin   = document.getElementById('siameseSpinner');
+  const label  = document.getElementById('siameseTrainLabel');
+
+  btn.disabled = true;
+  spin.style.display = 'block';
+  label.textContent  = 'Đang huấn luyện…';
+  document.getElementById('siameseStatus').textContent = 'Đang huấn luyện, vui lòng chờ…';
+  document.getElementById('siameseStatus').style.color = 'var(--gray-500)';
+
+  try {
+    const res  = await fetch(`${API}/siamese/train`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ epochs: 60, augment_factor: 15 }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.detail || `Lỗi ${res.status}`);
+
+    if (data.status === 'ok') {
+      showToast('success', 'Huấn luyện hoàn tất!',
+        `${data.n_pairs} cặp, ${data.epochs_run} epochs, ` +
+        `val loss=${data.best_val_loss.toFixed(4)}, ` +
+        `thời gian=${data.duration_seconds}s`);
+    } else {
+      showToast('error', 'Không thể huấn luyện', data.message);
+    }
+  } catch (err) {
+    showToast('error', 'Lỗi huấn luyện', err.message);
+  } finally {
+    btn.disabled = false;
+    spin.style.display = 'none';
+    label.textContent  = 'Huấn luyện lại';
+    loadSiameseStatus();
+  }
+}
+
+/* ═══════════════════════════════════════════
+   EXTRACT SIGNATURES PAGE
+═══════════════════════════════════════════ */
+let extractedSignatures = [];
+
+function goExtract() {
+  showPage('extract');
+  setBreadcrumb([{ label: 'Trích xuất chữ ký từ DO' }]);
+}
+
+function extractDragOver(e) {
+  e.preventDefault();
+  document.getElementById('extractDrop').style.borderColor = 'var(--blue)';
+  document.getElementById('extractDrop').style.background  = 'var(--blue-l)';
+}
+function extractDragLeave() {
+  document.getElementById('extractDrop').style.borderColor = 'var(--gray-200)';
+  document.getElementById('extractDrop').style.background  = '';
+}
+function extractDrop_(e) {
+  e.preventDefault();
+  extractDragLeave();
+  const f = e.dataTransfer.files[0];
+  if (f) setExtractFile(f);
+}
+function onExtractFileChange() {
+  const f = document.getElementById('extractFile').files[0];
+  if (f) setExtractFile(f);
+}
+function setExtractFile(file) {
+  document.getElementById('extractDropPh').style.display  = 'none';
+  document.getElementById('extractFileInfo').style.display = 'block';
+  document.getElementById('extractFileName').textContent  = file.name;
+  document.getElementById('extractFileSize').textContent  = (file.size / 1024).toFixed(1) + ' KB';
+  document.getElementById('extractBtn').disabled = false;
+  document.getElementById('extractResults').style.display = 'none';
+  extractedSignatures = [];
+}
+function clearExtractFile(e) {
+  e.stopPropagation();
+  document.getElementById('extractFile').value = '';
+  document.getElementById('extractDropPh').style.display  = 'block';
+  document.getElementById('extractFileInfo').style.display = 'none';
+  document.getElementById('extractBtn').disabled = true;
+  document.getElementById('extractResults').style.display = 'none';
+  extractedSignatures = [];
+}
+
+async function runExtract() {
+  const fileInput = document.getElementById('extractFile');
+  if (!fileInput.files[0]) return;
+
+  const btn   = document.getElementById('extractBtn');
+  const spin  = document.getElementById('extractSpinner');
+  const label = document.getElementById('extractBtnLabel');
+
+  btn.disabled = true;
+  spin.style.display = 'inline-block';
+  label.textContent  = 'Đang xử lý…';
+
+  const form = new FormData();
+  form.append('file', fileInput.files[0]);
+
+  try {
+    const res  = await fetch(`${API}/extract-signatures`, { method: 'POST', body: form });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.detail || `Lỗi ${res.status}`);
+
+    extractedSignatures = data.signatures || [];
+    renderExtractResults(data);
+    showToast('success', 'Trích xuất thành công', `Tìm thấy ${data.total} chữ ký`);
+  } catch (err) {
+    showToast('error', 'Lỗi trích xuất', err.message);
+  } finally {
+    btn.disabled = false;
+    spin.style.display = 'none';
+    label.textContent  = '🔍 Trích xuất chữ ký';
+  }
+}
+
+function renderExtractResults(data) {
+  const results = document.getElementById('extractResults');
+  const grid    = document.getElementById('extractGrid');
+  const count   = document.getElementById('extractCount');
+
+  count.textContent = `${data.total} chữ ký`;
+  grid.innerHTML    = '';
+
+  data.signatures.forEach((sig, idx) => {
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--gray-50);border:1.5px solid var(--gray-200);border-radius:12px;overflow:hidden;';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:8px 12px;background:var(--gray-100);font-size:.78rem;font-weight:600;color:var(--gray-700);display:flex;align-items:center;justify-content:space-between';
+    header.innerHTML = `<span>Trang ${sig.page}</span>
+      <button onclick="downloadSig(${idx})" title="Tải về" style="background:none;border:none;cursor:pointer;font-size:.8rem;color:var(--blue);padding:2px 6px;border-radius:4px">⬇ Tải</button>`;
+
+    const imgWrap = document.createElement('div');
+    imgWrap.style.cssText = 'padding:12px;display:flex;justify-content:center;background:#fff';
+
+    const img = document.createElement('img');
+    img.src   = `data:${sig.mime};base64,${sig.image_b64}`;
+    img.alt   = `Chữ ký trang ${sig.page}`;
+    img.style.cssText = 'max-width:100%;max-height:160px;object-fit:contain;border-radius:6px;';
+
+    imgWrap.appendChild(img);
+    card.appendChild(header);
+    card.appendChild(imgWrap);
+    grid.appendChild(card);
+  });
+
+  results.style.display = 'block';
+}
+
+function downloadSig(idx) {
+  const sig = extractedSignatures[idx];
+  if (!sig) return;
+  const a   = document.createElement('a');
+  a.href    = `data:${sig.mime};base64,${sig.image_b64}`;
+  a.download = `signature_page${sig.page}.png`;
+  a.click();
+}
+
+function downloadAllSigs() {
+  extractedSignatures.forEach((_, idx) => downloadSig(idx));
+}
+
+/* ═══════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════ */
+loadList();
+loadSiameseStatus();
+</script>
+</body>
+</html>
