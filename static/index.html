@@ -472,7 +472,9 @@
     .score-card-title .verdict { font-size: .72rem; padding: 2px 8px; border-radius: 99px; font-weight: 700; }
     .verdict.ok  { background: #dcfce7; color: #166534; }
     .verdict.no  { background: #fee2e2; color: #991b1b; }
-    .score-metrics { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+    .score-card-body { display: flex; gap: 14px; align-items: flex-start; }
+    .score-ref-img { flex-shrink: 0; width: 80px; height: 60px; border-radius: 6px; border: 1.5px solid var(--gray-200); object-fit: contain; background: #fff; }
+    .score-metrics { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 
     /* ── Siamese train panel ── */
     .siamese-panel {
@@ -1486,36 +1488,45 @@ function renderCheckResults(data) {
     const overall = ref.overall;
     const isValid = overall >= threshold;
     const pct = (v) => (v * 100).toFixed(1) + '%';
+    const imgUrl = ref.signature_id
+      ? `${API}/employees/${data.employee_code}/signatures/${ref.signature_id}/image`
+      : null;
+    const imgTag = imgUrl
+      ? `<img class="score-ref-img" src="${imgUrl}" alt="Chữ ký mẫu ${i + 1}" />`
+      : '';
     return `
       <div class="score-card ${isValid ? 'valid' : 'invalid'}">
         <div class="score-card-title">
           Chữ ký mẫu ${i + 1}
           <span class="verdict ${isValid ? 'ok' : 'no'}">${isValid ? '✓ Khớp' : '✗ Không khớp'}</span>
         </div>
-        <div class="score-metrics">
-          <div class="score-metric">
-            <div class="m-val">${pct(overall)}</div>
-            <div class="m-lbl">Tổng hợp</div>
-          </div>
-          <div class="score-metric" title="Siamese Neural Network — học trực tiếp từ chữ ký mẫu">
-            <div class="m-val" style="color:#6b21a8">${pct(ref.siamese ?? 0)}</div>
-            <div class="m-lbl">Siamese</div>
-          </div>
-          <div class="score-metric" title="EfficientNet-B0 deep feature cosine similarity">
-            <div class="m-val" style="color:#7e22ce">${pct(ref.deep ?? 0)}</div>
-            <div class="m-lbl">Deep CNN</div>
-          </div>
-          <div class="score-metric">
-            <div class="m-val">${pct(ref.ssim)}</div>
-            <div class="m-lbl">SSIM</div>
-          </div>
-          <div class="score-metric">
-            <div class="m-val">${pct(ref.orb)}</div>
-            <div class="m-lbl">ORB</div>
-          </div>
-          <div class="score-metric">
-            <div class="m-val">${pct(ref.contour)}</div>
-            <div class="m-lbl">Contour</div>
+        <div class="score-card-body">
+          ${imgTag}
+          <div class="score-metrics">
+            <div class="score-metric">
+              <div class="m-val">${pct(overall)}</div>
+              <div class="m-lbl">Tổng hợp</div>
+            </div>
+            <div class="score-metric" title="Siamese Neural Network — học trực tiếp từ chữ ký mẫu">
+              <div class="m-val" style="color:#6b21a8">${pct(ref.siamese ?? 0)}</div>
+              <div class="m-lbl">Siamese</div>
+            </div>
+            <div class="score-metric" title="EfficientNet-B0 deep feature cosine similarity">
+              <div class="m-val" style="color:#7e22ce">${pct(ref.deep ?? 0)}</div>
+              <div class="m-lbl">Deep CNN</div>
+            </div>
+            <div class="score-metric">
+              <div class="m-val">${pct(ref.ssim)}</div>
+              <div class="m-lbl">SSIM</div>
+            </div>
+            <div class="score-metric">
+              <div class="m-val">${pct(ref.orb)}</div>
+              <div class="m-lbl">ORB</div>
+            </div>
+            <div class="score-metric">
+              <div class="m-val">${pct(ref.contour)}</div>
+              <div class="m-lbl">Contour</div>
+            </div>
           </div>
         </div>
       </div>`;

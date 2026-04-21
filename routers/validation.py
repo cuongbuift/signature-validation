@@ -113,6 +113,12 @@ async def validate_signature(
     db.add(record)
     db.commit()
 
+    # Enrich per_reference with signature_id so the UI can fetch images
+    per_ref = result.detail.get("per_reference", [])
+    for i, entry in enumerate(per_ref):
+        if i < len(refs):
+            entry["signature_id"] = refs[i].id
+
     return ValidationResult(
         is_valid=result.is_valid,
         overall_score=round(result.overall_score, 4),
