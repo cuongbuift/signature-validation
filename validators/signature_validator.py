@@ -5,8 +5,7 @@ Signature validation using multi-metric comparison:
   3. ORB   (Oriented FAST and Rotated BRIEF) – keypoint feature matching
   4. Contour similarity – shape / stroke comparison
 
-Final score = weighted average of the four metrics.
-Default weights: deep=0.50, ssim=0.25, orb=0.15, contour=0.10
+Overall score = trung bình của SIAMESE + DEEP CNN + SSIM (ORB và Contour chỉ hiển thị, không ảnh hưởng tổng hợp).
 """
 
 from __future__ import annotations
@@ -215,28 +214,16 @@ class SignatureValidator:
         contour_score = self._contour(img_a, img_b)
         deep_score    = self._deep_sim(feat_a, feat_b)
 
-        # Determine effective weights based on model availability
-        w_s = self.w_siamese if siamese_sim > 0 else 0.0
-        w_d = self.w_deep    if feat_a is not None and feat_b is not None else 0.0
-        w_ss = self.w_ssim
-        w_o  = self.w_orb
-        w_c  = self.w_contour
+        # overall = trung bình của các chỉ số chính (SIAMESE, DEEP CNN, SSIM)
+        # chỉ tính các chỉ số có sẵn (model có thể chưa load)
+        main_scores = []
+        if siamese_sim > 0:
+            main_scores.append(siamese_sim)
+        if feat_a is not None and feat_b is not None:
+            main_scores.append(deep_score)
+        main_scores.append(ssim_score)
 
-        # Redistribute unavailable weights proportionally to remaining weights
-        total = w_s + w_d + w_ss + w_o + w_c
-        if total > 0:
-            scale = 1.0 / total
-            w_s, w_d, w_ss, w_o, w_c = (
-                w_s * scale, w_d * scale, w_ss * scale, w_o * scale, w_c * scale
-            )
-
-        overall = (
-            w_s  * siamese_sim
-            + w_d  * deep_score
-            + w_ss * ssim_score
-            + w_o  * orb_score
-            + w_c  * contour_score
-        )
+        overall = float(np.mean(main_scores))
 
         return {
             "siamese": float(siamese_sim),

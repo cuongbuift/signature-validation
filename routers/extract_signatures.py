@@ -62,7 +62,7 @@ def _get_ocr_reader():
     import easyocr  # imported lazily so startup is fast
 
     logger.info("Loading EasyOCR model for vi+en …")
-    reader = easyocr.Reader(["vi", "en"], gpu=True, verbose=False)
+    reader = easyocr.Reader(["vi", "en"], gpu=False, verbose=False)
     logger.info("EasyOCR ready.")
     return reader
 
