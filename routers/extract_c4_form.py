@@ -127,17 +127,38 @@ def _value_below(blocks: list[dict], anchor: dict, x_range: tuple[int, int],
 def _extract_customer_info(page_img: Image.Image) -> dict:
     blocks = _ocr_blocks(page_img)
     w, _h = page_img.size
+    print("[DEBUG] All OCR blocks (page 1):")
+    for bl in blocks:
+        print(f"[DEBUG]   y0={bl['y0']:4d} text='{bl['text']}'  ascii='{bl['ascii']}'")
 
     def find(kw, ascii_kw=None):
         return _find_block(blocks, kw, ascii_kw)
 
-    # 1. Tên đăng ký kinh doanh
-    b = find("đăng ký kinh doanh", "dang ky kinh doanh")
+    # 1. Tên đăng ký kinh doanh (C4) / Tên đơn vị kinh doanh (C2)
+    b = find("đăng ký kinh doanh", "dang ky kinh doanh") \
+        or find("đơn vị kinh doanh", "don vi kinh doanh")
     ten_dkk = _value_right_of(blocks, b) if b else ""
 
-    # 1.1. Tên cửa hàng
-    b = find("tên cửa hàng", "ten cua hang")
-    ten_cua_hang = _value_right_of(blocks, b) if b else ""
+    # 1.1. Tên cửa hàng — OCR may split the label into fragments across blocks,
+    # so we find the "2. Tên" label block then take whatever follows the last ":" on that line.
+    b = (find("tên cửa hàng", "ten cua hang")
+         or find("cửa hàng", "cua hang")
+         or find("2. tên", "2. ten"))
+    if b:
+        same_line = [bl for bl in blocks
+                     if abs(bl["y0"] - b["y0"]) <= 15 and bl["x0"] > b["x0"]]
+        same_line.sort(key=lambda bl: bl["x0"])
+        # Find the rightmost block that ends with ":" — that's the last label fragment
+        colon_blocks = [bl for bl in same_line if bl["text"].rstrip().endswith(":")]
+        if colon_blocks:
+            last_colon = max(colon_blocks, key=lambda bl: bl["x0"])
+            ten_cua_hang = " ".join(
+                bl["text"] for bl in same_line if bl["x0"] > last_colon["x1"]
+            ).strip()
+        else:
+            ten_cua_hang = " ".join(bl["text"] for bl in same_line).strip()
+    else:
+        ten_cua_hang = ""
 
     # 2. Giấy phép kinh doanh + Ngày cấp + Nơi cấp
     b = find("giấy phép", "giay phep")
@@ -156,7 +177,9 @@ def _extract_customer_info(page_img: Image.Image) -> dict:
         # try to split around "Ngày cấp" / "Noi cap"
         ngay_m = re.split(r"ngày\s*cấp|ngay\s*cap", raw, flags=re.IGNORECASE)
         if len(ngay_m) >= 2:
-            gp_number = ngay_m[0].strip().strip(":")
+            part0 = ngay_m[0].strip().strip(":")
+            nums = re.findall(r"\b\d{6,}\b", part0)
+            gp_number = nums[0] if nums else part0
             rest = ngay_m[1]
             noi_m = re.split(r"nơi\s*cấp|noi\s*cap", rest, flags=re.IGNORECASE)
             if len(noi_m) >= 2:
@@ -165,7 +188,15 @@ def _extract_customer_info(page_img: Image.Image) -> dict:
             else:
                 gp_ngay_cap = rest.strip().strip(":")
         else:
-            gp_number = raw.strip()
+            # Extract only the numeric GP number from raw (ignore any label fragments)
+            nums = re.findall(r"\b\d{6,}\b", raw)
+            gp_number = nums[0] if nums else raw.strip()
+
+        # C2: number may be embedded in the label block itself (e.g. "Giấy phép … 0318996463")
+        if not gp_number:
+            nums = re.findall(r"\b\d{6,}\b", b["text"])
+            if nums:
+                gp_number = nums[-1]
 
         # Also try dedicated "Ngày cấp" and "Nơi cấp" blocks near the row
         b_ngay = _find_block(blocks, "ngày cấp", "ngay cap")
@@ -297,9 +328,6 @@ def _crop_sig_box(page_img: Image.Image, y_top: int, y_bottom: int,
     y_bottom = min(img_h, y_bottom)
     cell = page_img.crop((x_left, y_top, x_right, y_bottom))
 
-    if _is_blank_cell(cell) or _is_slash_cell(cell):
-        return None, label_ratio
-
     cell_h = y_bottom - y_top
 
     # Try to detect the label; fall back to caller-supplied ratio if unavailable
@@ -307,13 +335,21 @@ def _crop_sig_box(page_img: Image.Image, y_top: int, y_bottom: int,
     if found_label_y1 is not None:
         label_ratio = found_label_y1 / cell_h if cell_h > 0 else label_ratio
 
+    # Determine the signature sub-area (below the label line)
     if label_ratio is not None and cell_h > 0:
         sig_y_top = y_top + int(label_ratio * cell_h) + 4
         sig_y_top = min(sig_y_top, y_bottom - 10)
-        cell = page_img.crop((x_left, sig_y_top, x_right, y_bottom))
+    else:
+        sig_y_top = y_top
 
-    tight = _tight_crop(cell, padding=15)
-    final = tight if tight is not None else cell
+    sig_area = page_img.crop((x_left, sig_y_top, x_right, y_bottom))
+
+    # Check blank/slash only on the signature sub-area (excludes label text)
+    if _is_blank_cell(sig_area) or _is_slash_cell(sig_area):
+        return None, label_ratio
+
+    tight = _tight_crop(sig_area, padding=15)
+    final = tight if tight is not None else sig_area
     return _pil_to_b64(final), label_ratio
 
 
@@ -346,34 +382,73 @@ def _detect_sig_cells(page_img: Image.Image) -> list[tuple[int, int, int, int]]:
     # Find contours of closed cells
     contours, _ = cv2.findContours(grid, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Minimum cell size: at least 15% page width × 4% page height
+    # Cell size bounds: signature cells are 15–52% page width, 4–30% page height
     min_cell_w = int(w * 0.15)
+    max_cell_w = int(w * 0.52)
     min_cell_h = int(h * 0.04)
+    max_cell_h = int(h * 0.30)
+    # "wide" cells: full-row cells where the vertical divider was missed
+    wide_cell_w_min = int(w * 0.60)
 
     cells = []
+    wide_cells = []   # full-width cells to be split later
+    rejected = []
     for cnt in contours:
         x, y, cw, ch = cv2.boundingRect(cnt)
-        if cw >= min_cell_w and ch >= min_cell_h:
+        if min_cell_w <= cw <= max_cell_w and min_cell_h <= ch <= max_cell_h:
             cells.append((x, y, x + cw, y + ch))
+        elif wide_cell_w_min <= cw and min_cell_h <= ch <= max_cell_h:
+            wide_cells.append((x, y, x + cw, y + ch))
+        else:
+            rejected.append((x, y, x + cw, y + ch, cw, ch,
+                             f"w={cw/w:.2%} h={ch/h:.2%}"))
+    print(f"[DEBUG] _detect_sig_cells: {len(cells)} normal, {len(wide_cells)} wide, {len(rejected)} rejected")
 
-    # Deduplicate near-identical boxes (keep largest when overlap > 80%)
-    cells.sort(key=lambda c: (c[1], c[0]))
-    filtered = []
+    # Deduplicate: sort smallest-area first so inner cells are kept over outer borders.
+    # If two boxes overlap >80% of the smaller one's area, the larger is dropped.
+    cells.sort(key=lambda c: (c[2] - c[0]) * (c[3] - c[1]))
+    filtered: list[tuple] = []
     for cell in cells:
         x0, y0, x1, y1 = cell
-        duplicate = False
-        for fx0, fy0, fx1, fy1 in filtered:
+        area = (x1 - x0) * (y1 - y0)
+        skip = False
+        for fc in filtered:
+            fx0, fy0, fx1, fy1 = fc
             ix0, iy0 = max(x0, fx0), max(y0, fy0)
             ix1, iy1 = min(x1, fx1), min(y1, fy1)
             if ix1 > ix0 and iy1 > iy0:
                 inter = (ix1 - ix0) * (iy1 - iy0)
-                area = (x1 - x0) * (y1 - y0)
-                if inter / area > 0.80:
-                    duplicate = True
+                f_area = (fx1 - fx0) * (fy1 - fy0)
+                if inter / min(area, f_area) > 0.80:
+                    skip = True
                     break
-        if not duplicate:
+        if not skip:
             filtered.append(cell)
 
+    # If wide cells exist, infer the vertical divider x from normal cells and split them
+    if wide_cells and filtered:
+        # Collect left-column and right-column x bounds from normal cells
+        left_x1s  = [c[2] for c in filtered if (c[0] + c[2]) // 2 < w // 2]
+        right_x0s = [c[0] for c in filtered if (c[0] + c[2]) // 2 >= w // 2]
+        if left_x1s and right_x0s:
+            divider = (int(np.median(left_x1s)) + int(np.median(right_x0s))) // 2
+        elif left_x1s:
+            divider = int(np.median(left_x1s))
+        elif right_x0s:
+            divider = int(np.median(right_x0s))
+        else:
+            divider = w // 2
+        print(f"[DEBUG] inferred vertical divider x={divider}, splitting {len(wide_cells)} wide cells")
+        for wc in wide_cells:
+            wx0, wy0, wx1, wy1 = wc
+            left_half  = (wx0, wy0, divider, wy1)
+            right_half = (divider, wy0, wx1, wy1)
+            filtered.append(left_half)
+            filtered.append(right_half)
+
+    print(f"[DEBUG] _detect_sig_cells final: {len(filtered)} cells (page {w}x{h})")
+    for c in filtered:
+        print(f"[DEBUG]   cell y0={c[1]} y1={c[3]} x0={c[0]} x1={c[2]}  w={(c[2]-c[0])/w*100:.1f}% h={(c[3]-c[1])/h*100:.1f}%")
     return filtered
 
 
@@ -381,8 +456,6 @@ def _extract_signatures_section_c(page_img: Image.Image) -> dict:
     """
     Crop signature cells from Section C using detected table borders.
     The form has a fixed 4-row × 2-column grid (người chịu trách nhiệm + 3 ủy quyền).
-
-    Falls back to OCR-based y-range detection if grid is not found.
     """
     GROUP_KEYS = [
         "nguoi_chiu_trach_nhiem",
@@ -393,29 +466,78 @@ def _extract_signatures_section_c(page_img: Image.Image) -> dict:
 
     cells = _detect_sig_cells(page_img)
     w, h = page_img.size
+    logger.info("Section C: detected %d grid cells", len(cells))
 
-    # Expect 8 cells (4 rows × 2 cols); accept 6–8
     if len(cells) >= 6:
-        # Sort: group into rows by y0, then left/right within each row
+        # Sort top-to-bottom, left-to-right
         cells.sort(key=lambda c: (c[1], c[0]))
 
-        # Cluster into rows: cells whose y0 are within 20px of each other → same row
+        # Cluster into rows: cells whose y0 are within 30px of each other
         rows: list[list[tuple]] = []
         for cell in cells:
             placed = False
             for row in rows:
-                if abs(cell[1] - row[0][1]) <= 20:
+                if abs(cell[1] - row[0][1]) <= 30:
                     row.append(cell)
                     placed = True
                     break
             if not placed:
                 rows.append([cell])
 
-        # Sort each row left-to-right, keep at most 2 cells per row
-        rows = [sorted(row, key=lambda c: c[0])[:2] for row in rows]
-        # Keep only rows that have 2 cells (both signature columns present)
-        rows = [row for row in rows if len(row) == 2]
-        rows = rows[:4]  # at most 4 groups
+        print(f"[DEBUG] Section C: {len(rows)} raw rows after clustering:")
+        for ri, row in enumerate(rows):
+            print(f"[DEBUG]   row {ri}: {len(row)} cells, y0s={[c[1] for c in row]}")
+
+        # Sort cells within each row left-to-right
+        rows = [sorted(row, key=lambda c: c[0]) for row in rows]
+
+        # Infer column bounds from rows that have 2 cells
+        complete_rows = [r for r in rows if len(r) >= 2]
+        if complete_rows:
+            left_x0  = int(np.median([r[0][0] for r in complete_rows]))
+            left_x1  = int(np.median([r[0][2] for r in complete_rows]))
+            right_x0 = int(np.median([r[1][0] for r in complete_rows]))
+            right_x1 = int(np.median([r[1][2] for r in complete_rows]))
+        else:
+            left_x0 = left_x1 = right_x0 = right_x1 = 0
+
+        # For rows with only 1 cell, synthesize the missing paired cell
+        for row in rows:
+            if len(row) == 1:
+                sole = row[0]
+                sole_cx = (sole[0] + sole[2]) // 2
+                page_mid = w // 2
+                if sole_cx < page_mid and right_x0 > 0:
+                    # left cell present → synthesize right cell
+                    row.append((right_x0, sole[1], right_x1, sole[3]))
+                    print(f"[DEBUG]   synthesized RIGHT cell for row y0={sole[1]}")
+                elif sole_cx >= page_mid and left_x0 > 0:
+                    # right cell present → synthesize left cell
+                    row.insert(0, (left_x0, sole[1], left_x1, sole[3]))
+                    print(f"[DEBUG]   synthesized LEFT cell for row y0={sole[1]}")
+
+        # Keep rows that have exactly 2 cells
+        rows = [r[:2] for r in rows if len(r) >= 2]
+
+        print(f"[DEBUG] Section C: {len(rows)} valid 2-cell rows detected")
+
+        # If more than 4 rows, pick the 4 that are most likely to be signature rows
+        # (tallest cells → most ink area available for signatures)
+        if len(rows) > 4:
+            rows.sort(key=lambda r: -(r[0][3] - r[0][1]))  # sort by cell height desc
+            rows = rows[:4]
+            rows.sort(key=lambda r: r[0][1])  # restore top-to-bottom order
+
+        # Collect best label_ratio from taller cells (more reliable detection)
+        best_ratio: Optional[float] = None
+        for row in rows:
+            left_cell = row[0]
+            cell_crop = page_img.crop((left_cell[0], left_cell[1], left_cell[2], left_cell[3]))
+            label_y1 = _find_ky_label_bottom(cell_crop)
+            cell_h = left_cell[3] - left_cell[1]
+            if label_y1 is not None and cell_h > 0:
+                best_ratio = label_y1 / cell_h
+                break
 
         results: dict = {}
         for i, key in enumerate(GROUP_KEYS):
@@ -423,47 +545,16 @@ def _extract_signatures_section_c(page_img: Image.Image) -> dict:
                 results[key] = {"chu_ky_lan_1": None, "chu_ky_lan_2": None}
                 continue
             left_cell, right_cell = rows[i]
-            # Process lần 1 first; share its label_ratio with lần 2
-            b64_left,  ratio = _crop_sig_box(page_img, *_cell_inner(left_cell))
-            b64_right, _     = _crop_sig_box(page_img, *_cell_inner(right_cell), label_ratio=ratio)
+            b64_left,  _ = _crop_sig_box(page_img, *_cell_inner(left_cell),  label_ratio=best_ratio)
+            b64_right, _ = _crop_sig_box(page_img, *_cell_inner(right_cell), label_ratio=best_ratio)
             results[key] = {
                 "chu_ky_lan_1": {"image_b64": b64_left,  "mime": "image/png"} if b64_left  else None,
                 "chu_ky_lan_2": {"image_b64": b64_right, "mime": "image/png"} if b64_right else None,
             }
         return results
 
-    # ── Fallback: use OCR header positions ────────────────────────────────────
-    logger.warning("Section C: grid detection found %d cells, falling back to OCR", len(cells))
-    blocks = _ocr_blocks(page_img)
-    group_keywords = [
-        ("nguoi_chiu_trach_nhiem", ["chịu trách nhiệm", "chiu trach nhiem"]),
-        ("uy_quyen_1", ["ủy quyền thứ 1", "uy quyen thu 1"]),
-        ("uy_quyen_2", ["ủy quyền thứ 2", "uy quyen thu 2"]),
-        ("uy_quyen_3", ["ủy quyền thứ 3", "uy quyen thu 3"]),
-    ]
-    group_y: dict[str, int] = {}
-    for key, kws in group_keywords:
-        for kw in kws:
-            b = _find_block(blocks, kw)
-            if b:
-                group_y[key] = b["y0"]
-                break
-    if not group_y:
-        logger.warning("Section C: no group headers found")
-        return {}
-    y_positions = sorted(group_y.items(), key=lambda t: t[1])
-    half_w = w // 2
-    results = {}
-    for i, (key, y_top) in enumerate(y_positions):
-        y_bottom = y_positions[i + 1][1] if i + 1 < len(y_positions) else min(h, y_top + int(h * 0.20))
-        sig_y_top = y_top + 30
-        b64_left,  ratio = _crop_sig_box(page_img, sig_y_top, y_bottom, 0,      half_w)
-        b64_right, _     = _crop_sig_box(page_img, sig_y_top, y_bottom, half_w, w, label_ratio=ratio)
-        results[key] = {
-            "chu_ky_lan_1": {"image_b64": b64_left,  "mime": "image/png"} if b64_left  else None,
-            "chu_ky_lan_2": {"image_b64": b64_right, "mime": "image/png"} if b64_right else None,
-        }
-    return results
+    logger.warning("Section C: only %d cells found, cannot extract signatures", len(cells))
+    return {k: {"chu_ky_lan_1": None, "chu_ky_lan_2": None} for k in GROUP_KEYS}
 
 
 def _cell_inner(cell: tuple[int, int, int, int], margin: int = 6) -> tuple[int, int, int, int]:
@@ -496,11 +587,11 @@ def extract_c4_form(pdf_bytes: bytes) -> dict:
 
 @router.post(
     "/extract-c4-form",
-    summary="Trích xuất thông tin khách hàng và chữ ký từ Phiếu Thông Tin Khách Hàng (Form C4)",
+    summary="Trích xuất thông tin khách hàng và chữ ký từ Phiếu Thông Tin Khách Hàng (Form C2 - C4)",
     response_class=JSONResponse,
 )
 async def extract_c4_form_endpoint(
-    file: UploadFile = File(..., description="File PDF Phiếu Thông Tin Khách Hàng (Form C4)"),
+    file: UploadFile = File(..., description="File PDF Phiếu Thông Tin Khách Hàng (Form C2 - C4)"),
 ):
     is_pdf = file.content_type == "application/pdf" or (
         (file.filename or "").lower().endswith(".pdf")
