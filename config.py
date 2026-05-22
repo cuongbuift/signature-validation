@@ -18,12 +18,12 @@ class Settings(BaseSettings):
     storage_dir: Path = Path("storage/signatures")
 
     # ── Validation ────────────────────────────────────────────────────────────
-    similarity_threshold: float = 0.75
-    siamese_weight: float = 0.35
-    deep_weight: float = 0.30
-    ssim_weight: float = 0.20
-    orb_weight: float = 0.10
-    contour_weight: float = 0.05
+    similarity_threshold: float = 0.80
+    siamese_weight: float = 1.00
+    deep_weight: float = 0.00
+    ssim_weight: float = 0.00
+    orb_weight: float = 0.00
+    contour_weight: float = 0.00
 
     # ── Siamese model ─────────────────────────────────────────────────────────
     siamese_model_path: Path = Path("models/siamese.pt")
