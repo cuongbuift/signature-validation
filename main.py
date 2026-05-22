@@ -9,15 +9,25 @@ from fastapi.staticfiles import StaticFiles
 
 import models
 from database import engine
-from routers import employees, signatures, validation, config as config_router, siamese as siamese_router, extract_signatures as extract_signatures_router
+from routers import employees, signatures, validation, config as config_router, siamese as siamese_router, extract_signatures as extract_signatures_router, extract_c4_form as extract_c4_form_router, customers as customers_router
+from routers.extract_signatures import _get_ocr_reader
+from routers.extract_c4_form import _get_vietocr
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create all tables on startup
     models.Base.metadata.create_all(bind=engine)
+    # Preload OCR models so the first request is not slow
+    import asyncio, logging
+    _log = logging.getLogger(__name__)
+    loop = asyncio.get_event_loop()
+    _log.info("Preloading EasyOCR …")
+    await loop.run_in_executor(None, _get_ocr_reader)
+    _log.info("Preloading VietOCR …")
+    await loop.run_in_executor(None, _get_vietocr)
+    _log.info("All OCR models ready.")
     yield
 
 
@@ -48,6 +58,8 @@ app.include_router(validation.router)
 app.include_router(config_router.router)
 app.include_router(siamese_router.router)
 app.include_router(extract_signatures_router.router)
+app.include_router(extract_c4_form_router.router)
+app.include_router(customers_router.router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

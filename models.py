@@ -66,3 +66,33 @@ class ValidationRecord(Base):
     validated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     employee: Mapped["Employee"] = relationship("Employee", back_populates="validations")
+
+
+class CustomerRecord(Base):
+    __tablename__ = "customer_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+    # Source PDF
+    pdf_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(300), nullable=False)
+
+    # Extracted customer info (editable)
+    ten_dang_ky_kinh_doanh: Mapped[str] = mapped_column(String(300), nullable=True)
+    ten_cua_hang: Mapped[str] = mapped_column(String(300), nullable=True)
+    giay_phep_so: Mapped[str] = mapped_column(String(100), nullable=True)
+    giay_phep_ngay_cap: Mapped[str] = mapped_column(String(50), nullable=True)
+    giay_phep_noi_cap: Mapped[str] = mapped_column(String(300), nullable=True)
+    dia_chi_kinh_doanh: Mapped[str] = mapped_column(String(500), nullable=True)
+
+    # Signature image file paths (null = not present)
+    sig_ct_lan1: Mapped[str] = mapped_column(String(500), nullable=True)  # chịu trách nhiệm lần 1
+    sig_ct_lan2: Mapped[str] = mapped_column(String(500), nullable=True)
+    sig_uq1_lan1: Mapped[str] = mapped_column(String(500), nullable=True)  # ủy quyền 1 lần 1
+    sig_uq1_lan2: Mapped[str] = mapped_column(String(500), nullable=True)
+    sig_uq2_lan1: Mapped[str] = mapped_column(String(500), nullable=True)
+    sig_uq2_lan2: Mapped[str] = mapped_column(String(500), nullable=True)
+    sig_uq3_lan1: Mapped[str] = mapped_column(String(500), nullable=True)
+    sig_uq3_lan2: Mapped[str] = mapped_column(String(500), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

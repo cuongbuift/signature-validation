@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+import base64
+import io
+import logging
+import os
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
+from sqlalchemy.orm import Session
+
+from database import get_db
+from models import CustomerRecord
+from routers.extract_c4_form import extract_c4_form
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/c4-customers", tags=["C4 Customers"])
+
+# Storage directories
+STORAGE = Path("storage")
+PDF_DIR = STORAGE / "c4_pdfs"
+SIG_DIR = STORAGE / "c4_signatures"
+PDF_DIR.mkdir(parents=True, exist_ok=True)
+SIG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Signature keys and their field names on the model
+SIG_KEYS = [
+    "sig_ct_lan1", "sig_ct_lan2",
+    "sig_uq1_lan1", "sig_uq1_lan2",
+    "sig_uq2_lan1", "sig_uq2_lan2",
+    "sig_uq3_lan1", "sig_uq3_lan2",
+]
+
+# Map from extraction response keys to model field names
+_SIG_MAP = {
+    ("nguoi_chiu_trach_nhiem", "chu_ky_lan_1"): "sig_ct_lan1",
+    ("nguoi_chiu_trach_nhiem", "chu_ky_lan_2"): "sig_ct_lan2",
+    ("uy_quyen_1",              "chu_ky_lan_1"): "sig_uq1_lan1",
+    ("uy_quyen_1",              "chu_ky_lan_2"): "sig_uq1_lan2",
+    ("uy_quyen_2",              "chu_ky_lan_1"): "sig_uq2_lan1",
+    ("uy_quyen_2",              "chu_ky_lan_2"): "sig_uq2_lan2",
+    ("uy_quyen_3",              "chu_ky_lan_1"): "sig_uq3_lan1",
+    ("uy_quyen_3",              "chu_ky_lan_2"): "sig_uq3_lan2",
+}
+
+
+def _record_to_dict(rec: CustomerRecord) -> dict:
+    return {
+        "id": rec.id,
+        "original_filename": rec.original_filename,
+        "ten_dang_ky_kinh_doanh": rec.ten_dang_ky_kinh_doanh,
+        "ten_cua_hang": rec.ten_cua_hang,
+        "giay_phep_so": rec.giay_phep_so,
+        "giay_phep_ngay_cap": rec.giay_phep_ngay_cap,
+        "giay_phep_noi_cap": rec.giay_phep_noi_cap,
+        "dia_chi_kinh_doanh": rec.dia_chi_kinh_doanh,
+        "signatures": {k: (getattr(rec, k) is not None) for k in SIG_KEYS},
+        "created_at": rec.created_at.isoformat(),
+    }
+
+
+# ── Endpoints ──────────────────────────────────────────────────────────────────
+
+@router.post("", summary="Upload PDF Form C4, trích xuất và lưu thông tin khách hàng")
+async def create_customer(
+    file: UploadFile = File(...),
+    ten_dang_ky_kinh_doanh: str = Form(""),
+    ten_cua_hang: str = Form(""),
+    giay_phep_so: str = Form(""),
+    giay_phep_ngay_cap: str = Form(""),
+    giay_phep_noi_cap: str = Form(""),
+    dia_chi_kinh_doanh: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    is_pdf = file.content_type == "application/pdf" or (
+        (file.filename or "").lower().endswith(".pdf")
+    )
+    if not is_pdf:
+        raise HTTPException(status_code=415, detail="Chỉ hỗ trợ file PDF.")
+
+    pdf_bytes = await file.read()
+
+    # Extract from PDF
+    try:
+        extracted = extract_c4_form(pdf_bytes)
+    except Exception as exc:
+        logger.exception("C4 extract error")
+        raise HTTPException(status_code=422, detail=f"Lỗi trích xuất PDF: {exc}")
+
+    # Create DB record first to get ID for file paths
+    rec = CustomerRecord(
+        pdf_path="",
+        original_filename=file.filename or "form.pdf",
+        ten_dang_ky_kinh_doanh=ten_dang_ky_kinh_doanh or extracted["customer_info"].get("ten_dang_ky_kinh_doanh", ""),
+        ten_cua_hang=ten_cua_hang or extracted["customer_info"].get("ten_cua_hang", ""),
+        giay_phep_so=giay_phep_so or extracted["customer_info"].get("giay_phep_kinh_doanh", {}).get("so", ""),
+        giay_phep_ngay_cap=giay_phep_ngay_cap or extracted["customer_info"].get("giay_phep_kinh_doanh", {}).get("ngay_cap", ""),
+        giay_phep_noi_cap=giay_phep_noi_cap or extracted["customer_info"].get("giay_phep_kinh_doanh", {}).get("noi_cap", ""),
+        dia_chi_kinh_doanh=dia_chi_kinh_doanh or extracted["customer_info"].get("dia_chi_kinh_doanh", ""),
+    )
+    db.add(rec)
+    db.flush()  # get rec.id
+
+    # Save PDF
+    pdf_path = PDF_DIR / f"{rec.id}.pdf"
+    pdf_path.write_bytes(pdf_bytes)
+    rec.pdf_path = str(pdf_path)
+
+    # Save signature images
+    sigs = extracted.get("signatures", {})
+    for (group_key, sig_key), field in _SIG_MAP.items():
+        group = sigs.get(group_key)
+        if not group:
+            continue
+        sig_data = group.get(sig_key)
+        if not sig_data or not sig_data.get("image_b64"):
+            continue
+        img_path = SIG_DIR / f"{rec.id}_{field}.png"
+        img_path.write_bytes(base64.b64decode(sig_data["image_b64"]))
+        setattr(rec, field, str(img_path))
+
+    db.commit()
+    db.refresh(rec)
+    return _record_to_dict(rec)
+
+
+@router.get("", summary="Danh sách khách hàng C4")
+def list_customers(
+    skip: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    records = db.query(CustomerRecord).order_by(CustomerRecord.id.desc()).offset(skip).limit(limit).all()
+    return [_record_to_dict(r) for r in records]
+
+
+@router.get("/{record_id}", summary="Chi tiết khách hàng C4")
+def get_customer(record_id: int, db: Session = Depends(get_db)):
+    rec = db.get(CustomerRecord, record_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi.")
+    return _record_to_dict(rec)
+
+
+@router.put("/{record_id}", summary="Cập nhật thông tin khách hàng C4")
+def update_customer(
+    record_id: int,
+    ten_dang_ky_kinh_doanh: Optional[str] = None,
+    ten_cua_hang: Optional[str] = None,
+    giay_phep_so: Optional[str] = None,
+    giay_phep_ngay_cap: Optional[str] = None,
+    giay_phep_noi_cap: Optional[str] = None,
+    dia_chi_kinh_doanh: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    rec = db.get(CustomerRecord, record_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi.")
+    if ten_dang_ky_kinh_doanh is not None:
+        rec.ten_dang_ky_kinh_doanh = ten_dang_ky_kinh_doanh
+    if ten_cua_hang is not None:
+        rec.ten_cua_hang = ten_cua_hang
+    if giay_phep_so is not None:
+        rec.giay_phep_so = giay_phep_so
+    if giay_phep_ngay_cap is not None:
+        rec.giay_phep_ngay_cap = giay_phep_ngay_cap
+    if giay_phep_noi_cap is not None:
+        rec.giay_phep_noi_cap = giay_phep_noi_cap
+    if dia_chi_kinh_doanh is not None:
+        rec.dia_chi_kinh_doanh = dia_chi_kinh_doanh
+    db.commit()
+    db.refresh(rec)
+    return _record_to_dict(rec)
+
+
+@router.delete("/{record_id}", status_code=204, summary="Xóa khách hàng C4")
+def delete_customer(record_id: int, db: Session = Depends(get_db)):
+    rec = db.get(CustomerRecord, record_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi.")
+    # Delete files
+    for path_field in ["pdf_path"] + SIG_KEYS:
+        p = getattr(rec, path_field, None)
+        if p:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except Exception:
+                pass
+    db.delete(rec)
+    db.commit()
+
+
+@router.get("/{record_id}/pdf", summary="Tải file PDF gốc")
+def get_pdf(record_id: int, db: Session = Depends(get_db)):
+    rec = db.get(CustomerRecord, record_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi.")
+    if not rec.pdf_path or not Path(rec.pdf_path).exists():
+        raise HTTPException(status_code=404, detail="File PDF không tồn tại.")
+    return FileResponse(rec.pdf_path, media_type="application/pdf",
+                        filename=rec.original_filename)
+
+
+@router.get("/{record_id}/signatures/{sig_key}", summary="Lấy ảnh chữ ký")
+def get_signature_image(record_id: int, sig_key: str, db: Session = Depends(get_db)):
+    if sig_key not in SIG_KEYS:
+        raise HTTPException(status_code=400, detail=f"sig_key không hợp lệ: {sig_key}")
+    rec = db.get(CustomerRecord, record_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi.")
+    path = getattr(rec, sig_key, None)
+    if not path or not Path(path).exists():
+        raise HTTPException(status_code=404, detail="Chữ ký không tồn tại.")
+    return FileResponse(path, media_type="image/png")
+
+
+@router.post("/extract-preview", summary="Chỉ trích xuất (không lưu) để xem trước")
+async def extract_preview(file: UploadFile = File(...)):
+    is_pdf = file.content_type == "application/pdf" or (
+        (file.filename or "").lower().endswith(".pdf")
+    )
+    if not is_pdf:
+        raise HTTPException(status_code=415, detail="Chỉ hỗ trợ file PDF.")
+    pdf_bytes = await file.read()
+    try:
+        result = extract_c4_form(pdf_bytes)
+    except Exception as exc:
+        logger.exception("C4 preview extract error")
+        raise HTTPException(status_code=422, detail=f"Lỗi trích xuất PDF: {exc}")
+    return result
