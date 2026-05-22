@@ -19,9 +19,9 @@ class Settings(BaseSettings):
 
     # ── Validation ────────────────────────────────────────────────────────────
     similarity_threshold: float = 0.80
-    siamese_weight: float = 0.60
+    siamese_weight: float = 0.70
     deep_weight: float = 0.30
-    ssim_weight: float = 0.20
+    ssim_weight: float = 0.10
     orb_weight: float = 0.00
     contour_weight: float = 0.00
 

@@ -4,20 +4,30 @@ Trainer for the Siamese signature verification network.
 Data pipeline
 -------------
 1. Load all reference signature images from DB (via file paths).
+   Sources:
+     a) Employee reference signatures  — {employee_id: [path, ...]}
+     b) Customer paired signatures     — {identity_key: [path, ...]}
+        Each (customer_id, signer_slot) is a unique signing identity.
+        e.g. "cust_5_ct"  → [sig_ct_lan1, sig_ct_lan2]
+             "cust_5_uq1" → [sig_uq1_lan1, sig_uq1_lan2]
 2. Preprocess each image with SignatureValidator._load_and_preprocess().
 3. Augment each image N times (random rotation, elastic distortion, etc.)
    to counteract the small number of training samples.
 4. Build pair dataset:
-     Positive pairs (y=1): two signatures from the same employee.
-     Negative pairs (y=0): signatures from different employees.
+     Positive pairs (y=1): two signatures from the same identity.
+     Negative pairs (y=0): signatures from different identities.
    Pairs are balanced (equal positives and negatives).
 5. Train SiameseCNN with ContrastiveLoss using Adam + cosine LR schedule.
 6. Save the best model (lowest validation loss) to  models/siamese.pt.
 
 Typical usage
 -------------
-trainer = SiameseTrainer(db_session)
-report  = trainer.train(epochs=60, augment_factor=12)
+trainer = SiameseTrainer(
+    reference_data={1: ["emp1_sig1.png", "emp1_sig2.png"], ...},
+    customer_data={"cust_5_ct": ["path1.png", "path2.png"], ...},
+    model_path=Path("models/siamese.pt"),
+)
+report = trainer.train(epochs=60, augment_factor=12)
 """
 
 from __future__ import annotations
@@ -57,6 +67,8 @@ class TrainingReport:
     train_loss_history: list[float] = field(default_factory=list)
     val_loss_history: list[float]   = field(default_factory=list)
     n_employees: int = 0
+    n_customers: int = 0
+    n_identities: int = 0
     n_pairs: int = 0
     duration_seconds: float = 0.0
 
@@ -153,25 +165,32 @@ class PairDataset(Dataset):
 
 class SiameseTrainer:
     """
-    Builds training pairs from the database and trains SiameseCNN.
+    Builds training pairs from employee and customer signature data, then
+    trains SiameseCNN.
 
     Parameters
     ----------
     reference_data:
-        Dict mapping  employee_id → list[file_path_str].
-        Caller (router) is responsible for querying the DB and passing this.
+        Dict mapping employee_id → list[file_path_str].
+    customer_data:
+        Dict mapping identity_key → list[file_path_str].
+        Each key represents one unique signer from a customer record,
+        e.g. "cust_5_ct", "cust_5_uq1", "cust_12_ct".
+        Images in the same list are all from the same person (positive pairs).
     model_path:
         Where to save the best model weights.
     """
 
-    MIN_EMPLOYEES = 2   # need at least 2 different signers for negative pairs
+    MIN_IDENTITIES = 2   # need at least 2 different signers for negative pairs
 
     def __init__(
         self,
         reference_data: dict[int, list[str]],
         model_path: Path,
+        customer_data: dict[str, list[str]] | None = None,
     ) -> None:
         self.reference_data = reference_data   # {emp_id: [path1, path2, ...]}
+        self.customer_data  = customer_data or {}
         self.model_path     = model_path
         self.device         = _best_device()
 
@@ -190,49 +209,58 @@ class SiameseTrainer:
         t0 = time.time()
 
         n_employees = len(self.reference_data)
-        if n_employees < self.MIN_EMPLOYEES:
+        n_customers = len(set(
+            k.split("_")[1] for k in self.customer_data if k.startswith("cust_")
+        ))
+
+        # 1. Load & preprocess images — merge employee + customer identities
+        logger.info("Loading and preprocessing signature images …")
+        # identity_images: str_key → list of preprocessed images
+        identity_images: dict[str, list[np.ndarray]] = {}
+
+        for emp_id, paths in self.reference_data.items():
+            imgs = [self._preprocess(p) for p in paths]
+            imgs = [i for i in imgs if i is not None]
+            if imgs:
+                identity_images[f"emp_{emp_id}"] = imgs
+
+        for key, paths in self.customer_data.items():
+            imgs = [self._preprocess(p) for p in paths]
+            imgs = [i for i in imgs if i is not None]
+            if imgs:
+                identity_images[key] = imgs
+
+        n_identities = len(identity_images)
+        if n_identities < self.MIN_IDENTITIES:
             return TrainingReport(
                 status="skipped",
                 message=(
-                    f"Cần ít nhất {self.MIN_EMPLOYEES} nhân viên có chữ ký mẫu để huấn luyện. "
-                    f"Hiện tại chỉ có {n_employees}."
+                    f"Cần ít nhất {self.MIN_IDENTITIES} identity có chữ ký hợp lệ để huấn luyện. "
+                    f"Hiện tại chỉ có {n_identities} (nhân viên: {n_employees}, "
+                    f"khách hàng: {n_customers})."
                 ),
                 n_employees=n_employees,
-            )
-
-        # 1. Load & preprocess images
-        logger.info("Loading and preprocessing signature images …")
-        emp_images: dict[int, list[np.ndarray]] = {}
-        for emp_id, paths in self.reference_data.items():
-            imgs = []
-            for p in paths:
-                img = self._preprocess(p)
-                if img is not None:
-                    imgs.append(img)
-            if imgs:
-                emp_images[emp_id] = imgs
-
-        if len(emp_images) < self.MIN_EMPLOYEES:
-            return TrainingReport(
-                status="skipped",
-                message="Không đọc được đủ ảnh chữ ký từ disk.",
-                n_employees=n_employees,
+                n_customers=n_customers,
+                n_identities=n_identities,
             )
 
         # 2. Augment
         logger.info("Augmenting (×%d) …", augment_factor)
-        for emp_id in emp_images:
-            originals = emp_images[emp_id]
+        for key in identity_images:
+            originals = identity_images[key]
             augmented = list(originals)
             for img in originals:
                 for _ in range(augment_factor - 1):
                     augmented.append(_augment(img))
-            emp_images[emp_id] = augmented
+            identity_images[key] = augmented
 
         # 3. Build pairs
-        pairs = self._build_pairs(emp_images)
+        pairs = self._build_pairs(identity_images)
         random.shuffle(pairs)
-        logger.info("Built %d pairs from %d employees.", len(pairs), len(emp_images))
+        logger.info(
+            "Built %d pairs from %d identities (%d employees, %d customers).",
+            len(pairs), n_identities, n_employees, n_customers,
+        )
 
         # 4. Train/val split
         dataset  = PairDataset(pairs)
@@ -290,7 +318,9 @@ class SiameseTrainer:
             best_val_loss=round(best_val_loss, 5),
             train_loss_history=train_history,
             val_loss_history=val_history,
-            n_employees=len(emp_images),
+            n_employees=n_employees,
+            n_customers=n_customers,
+            n_identities=n_identities,
             n_pairs=len(pairs),
             duration_seconds=round(duration, 1),
         )
@@ -341,22 +371,22 @@ class SiameseTrainer:
 
     @staticmethod
     def _build_pairs(
-        emp_images: dict[int, list[np.ndarray]],
+        identity_images: dict[str, list[np.ndarray]],
     ) -> list[tuple[np.ndarray, np.ndarray, int]]:
         """
         Build balanced positive (y=1) and negative (y=0) pairs.
 
         Strategy
         --------
-        * Positive: all combinations within each employee's images.
-        * Negative: random cross-employee pairs, limited to 1× the number
+        * Positive: all combinations within each identity's images.
+        * Negative: random cross-identity pairs, limited to 1× the number
           of positive pairs to keep the dataset balanced.
         """
         pairs: list[tuple[np.ndarray, np.ndarray, int]] = []
-        emp_ids = list(emp_images.keys())
+        identity_keys = list(identity_images.keys())
 
         # Positive pairs
-        for imgs in emp_images.values():
+        for imgs in identity_images.values():
             for i in range(len(imgs)):
                 for j in range(i + 1, len(imgs)):
                     pairs.append((imgs[i], imgs[j], 1))
@@ -368,9 +398,9 @@ class SiameseTrainer:
         attempts = 0
         while len(neg_pairs) < n_pos and attempts < n_pos * 20:
             attempts += 1
-            id_a, id_b = random.sample(emp_ids, 2)
-            img_a = random.choice(emp_images[id_a])
-            img_b = random.choice(emp_images[id_b])
+            id_a, id_b = random.sample(identity_keys, 2)
+            img_a = random.choice(identity_images[id_a])
+            img_b = random.choice(identity_images[id_b])
             neg_pairs.append((img_a, img_b, 0))
 
         pairs.extend(neg_pairs)

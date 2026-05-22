@@ -61,4 +61,4 @@ dmypy.json
 *.log
 
 # Static storage and generated assets
-storage/signatures/*
+storage/*

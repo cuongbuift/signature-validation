@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db
-from models import Employee, ReferenceSignature
+from models import CustomerRecord, Employee, ReferenceSignature
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/siamese", tags=["Siamese Model"])
@@ -37,6 +37,8 @@ class TrainResponse(BaseModel):
     epochs_run: int = 0
     best_val_loss: float = 0.0
     n_employees: int = 0
+    n_customers: int = 0
+    n_identities: int = 0
     n_pairs: int = 0
     duration_seconds: float = 0.0
     train_loss_history: list[float] = []
@@ -48,6 +50,8 @@ class StatusResponse(BaseModel):
     model_path: str
     last_trained: str | None
     n_employees_at_training: int | None
+    n_customers_at_training: int | None
+    n_identities_at_training: int | None
     n_pairs_at_training: int | None
 
 
@@ -78,6 +82,8 @@ def get_status():
         model_path=str(settings.siamese_model_path),
         last_trained=meta.get("last_trained"),
         n_employees_at_training=meta.get("n_employees"),
+        n_customers_at_training=meta.get("n_customers"),
+        n_identities_at_training=meta.get("n_identities"),
         n_pairs_at_training=meta.get("n_pairs"),
     )
 
@@ -114,12 +120,35 @@ def train_model(
         if paths:
             reference_data[emp.id] = paths
 
-    if len(reference_data) < 2:
+    # Collect customer signature data from DB
+    # Each (customer_id, signer_slot) is a unique signing identity.
+    # Slots: ct, uq1, uq2, uq3 — each has lan1 and lan2 images.
+    CUSTOMER_SLOTS = [
+        ("ct",  "sig_ct_lan1",  "sig_ct_lan2"),
+        ("uq1", "sig_uq1_lan1", "sig_uq1_lan2"),
+        ("uq2", "sig_uq2_lan1", "sig_uq2_lan2"),
+        ("uq3", "sig_uq3_lan1", "sig_uq3_lan2"),
+    ]
+    customer_data: dict[str, list[str]] = {}
+    customers = db.query(CustomerRecord).all()
+    for cust in customers:
+        for slot, col1, col2 in CUSTOMER_SLOTS:
+            paths = []
+            p1 = getattr(cust, col1, None)
+            p2 = getattr(cust, col2, None)
+            if p1 and Path(p1).exists():
+                paths.append(p1)
+            if p2 and Path(p2).exists():
+                paths.append(p2)
+            if paths:
+                customer_data[f"cust_{cust.id}_{slot}"] = paths
+
+    if len(reference_data) < 2 and len(customer_data) < 2:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Cần ít nhất 2 nhân viên có chữ ký mẫu hợp lệ trên disk để huấn luyện. "
-                f"Hiện tại: {len(reference_data)} nhân viên."
+                "Cần ít nhất 2 identity có chữ ký mẫu hợp lệ để huấn luyện. "
+                f"Hiện tại: {len(reference_data)} nhân viên, {len(customer_data)} signer khách hàng."
             ),
         )
 
@@ -127,6 +156,7 @@ def train_model(
     from validators.siamese_trainer import SiameseTrainer
     trainer = SiameseTrainer(
         reference_data=reference_data,
+        customer_data=customer_data,
         model_path=settings.siamese_model_path,
     )
     report = trainer.train(
@@ -139,6 +169,8 @@ def train_model(
         _write_meta({
             "last_trained": datetime.utcnow().isoformat(),
             "n_employees": report.n_employees,
+            "n_customers": report.n_customers,
+            "n_identities": report.n_identities,
             "n_pairs": report.n_pairs,
             "epochs": report.epochs_run,
             "best_val_loss": report.best_val_loss,
@@ -150,6 +182,8 @@ def train_model(
         epochs_run=report.epochs_run,
         best_val_loss=report.best_val_loss,
         n_employees=report.n_employees,
+        n_customers=report.n_customers,
+        n_identities=report.n_identities,
         n_pairs=report.n_pairs,
         duration_seconds=report.duration_seconds,
         train_loss_history=report.train_loss_history,
