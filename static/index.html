@@ -615,7 +615,7 @@
     <div class="breadcrumb" id="breadcrumb"></div>
     <div style="margin-left:auto;display:flex;gap:8px">
       <button class="btn btn-secondary btn-sm" onclick="goC4List()">
-        📋 Khách hàng C4
+        📋 Khách hàng
       </button>
       <button class="btn btn-secondary btn-sm" onclick="goExtract()">
         📄 Trích xuất chữ ký từ DO
@@ -919,8 +919,8 @@
     <div class="card">
       <div class="card-header">
         <div>
-          <h1>Danh sách Khách hàng C4</h1>
-          <p>Quản lý Phiếu Thông Tin Khách Hàng (Form C4)</p>
+          <h1>Danh sách Khách hàng</h1>
+          <p>Quản lý Phiếu Thông Tin Khách Hàng</p>
         </div>
         <button class="btn btn-primary" onclick="goC4Create()">
           <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
@@ -965,8 +965,8 @@
     <div class="card">
       <div class="card-header">
         <div>
-          <h1>Thêm khách hàng C4</h1>
-          <p>Upload PDF Form C4 — hệ thống tự trích xuất thông tin và chữ ký</p>
+          <h1>Thêm khách hàng</h1>
+          <p>Upload PDF (Form C4 - Form C2) — hệ thống tự trích xuất thông tin và chữ ký</p>
         </div>
         <button class="btn btn-secondary btn-sm" onclick="goC4List()" style="white-space:nowrap">← Quay lại</button>
       </div>
@@ -988,7 +988,7 @@
             <div id="c4DropPh">
               <svg width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="color:var(--gray-400);margin-bottom:12px"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
               <p style="font-size:1rem;font-weight:600;color:var(--gray-700)">Kéo thả hoặc nhấn để chọn file PDF</p>
-              <small style="color:var(--gray-400)">Phiếu Thông Tin Khách Hàng (Form C4)</small>
+              <small style="color:var(--gray-400)">Phiếu Thông Tin Khách Hàng (Form C4 - Form C2)</small>
             </div>
             <div id="c4FileInfo" style="display:none">
               <svg width="36" height="36" fill="none" stroke="#ef4444" stroke-width="1.5" viewBox="0 0 24 24" style="margin-bottom:8px"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
@@ -2089,14 +2089,14 @@ let c4DetailId     = null;
 
 /* ── Navigation ── */
 function goC4List() {
-  setBreadcrumb([{ label: 'Danh sách KH C4' }]);
+  setBreadcrumb([{ label: 'Danh sách KH' }]);
   showPage('c4-list');
   loadC4List();
 }
 
 function goC4Create() {
   setBreadcrumb([
-    { label: 'Danh sách KH C4', action: 'goC4List()' },
+    { label: 'Danh sách KH', action: 'goC4List()' },
     { label: 'Thêm khách hàng' },
   ]);
   resetC4CreateForm();
@@ -2106,7 +2106,7 @@ function goC4Create() {
 function goC4Detail(id) {
   c4DetailId = id;
   setBreadcrumb([
-    { label: 'Danh sách KH C4', action: 'goC4List()' },
+    { label: 'Danh sách KH', action: 'goC4List()' },
     { label: `Chi tiết #${id}` },
   ]);
   loadC4Detail(id);

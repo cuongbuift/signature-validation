@@ -337,12 +337,12 @@ def _crop_sig_box(page_img: Image.Image, y_top: int, y_bottom: int,
 
     # Determine the signature sub-area (below the label line)
     if label_ratio is not None and cell_h > 0:
-        sig_y_top = y_top + int(label_ratio * cell_h) + 4
+        sig_y_top = y_top + int(label_ratio * cell_h)
         sig_y_top = min(sig_y_top, y_bottom - 10)
     else:
         sig_y_top = y_top
 
-    sig_area = page_img.crop((x_left, sig_y_top, x_right, y_bottom))
+    sig_area = page_img.crop((x_left, sig_y_top - 30, x_right, y_bottom + 30))
 
     # Check blank/slash only on the signature sub-area (excludes label text)
     if _is_blank_cell(sig_area) or _is_slash_cell(sig_area):
@@ -439,12 +439,29 @@ def _detect_sig_cells(page_img: Image.Image) -> list[tuple[int, int, int, int]]:
         else:
             divider = w // 2
         print(f"[DEBUG] inferred vertical divider x={divider}, splitting {len(wide_cells)} wide cells")
+        def _overlaps_existing(cell, existing, threshold=0.60):
+            x0, y0, x1, y1 = cell
+            area = (x1 - x0) * (y1 - y0)
+            if area == 0:
+                return True
+            for fc in existing:
+                fx0, fy0, fx1, fy1 = fc
+                ix0, iy0 = max(x0, fx0), max(y0, fy0)
+                ix1, iy1 = min(x1, fx1), min(y1, fy1)
+                if ix1 > ix0 and iy1 > iy0:
+                    inter = (ix1 - ix0) * (iy1 - iy0)
+                    if inter / area > threshold:
+                        return True
+            return False
+
         for wc in wide_cells:
             wx0, wy0, wx1, wy1 = wc
             left_half  = (wx0, wy0, divider, wy1)
             right_half = (divider, wy0, wx1, wy1)
-            filtered.append(left_half)
-            filtered.append(right_half)
+            if not _overlaps_existing(left_half, filtered):
+                filtered.append(left_half)
+            if not _overlaps_existing(right_half, filtered):
+                filtered.append(right_half)
 
     print(f"[DEBUG] _detect_sig_cells final: {len(filtered)} cells (page {w}x{h})")
     for c in filtered:
@@ -524,9 +541,15 @@ def _extract_signatures_section_c(page_img: Image.Image) -> dict:
         # If more than 4 rows, pick the 4 that are most likely to be signature rows
         # (tallest cells → most ink area available for signatures)
         if len(rows) > 4:
-            rows.sort(key=lambda r: -(r[0][3] - r[0][1]))  # sort by cell height desc
-            rows = rows[:4]
-            rows.sort(key=lambda r: r[0][1])  # restore top-to-bottom order
+            # Section C is always in the upper portion of the signature page.
+            # Filter out rows in the bottom 40% of the page (date/personnel section),
+            # then keep the top 4 remaining rows.
+            upper_rows = [r for r in rows if r[0][1] < h * 0.60]
+            if len(upper_rows) >= 4:
+                rows = upper_rows[:4]
+            else:
+                # Fallback: keep topmost 4 rows
+                rows = rows[:4]
 
         # Collect best label_ratio from taller cells (more reliable detection)
         best_ratio: Optional[float] = None
@@ -539,14 +562,21 @@ def _extract_signatures_section_c(page_img: Image.Image) -> dict:
                 best_ratio = label_y1 / cell_h
                 break
 
+        print(f"[DEBUG] best_ratio={best_ratio}, rows selected:")
+        for ri, row in enumerate(rows):
+            print(f"[DEBUG]   row {ri}: y0={row[0][1]} y1={row[0][3]} h={row[0][3]-row[0][1]}px")
+
         results: dict = {}
         for i, key in enumerate(GROUP_KEYS):
             if i >= len(rows):
                 results[key] = {"chu_ky_lan_1": None, "chu_ky_lan_2": None}
                 continue
             left_cell, right_cell = rows[i]
-            b64_left,  _ = _crop_sig_box(page_img, *_cell_inner(left_cell),  label_ratio=best_ratio)
-            b64_right, _ = _crop_sig_box(page_img, *_cell_inner(right_cell), label_ratio=best_ratio)
+            b64_left,  ratio_left  = _crop_sig_box(page_img, *_cell_inner(left_cell),  label_ratio=best_ratio)
+            b64_right, ratio_right = _crop_sig_box(page_img, *_cell_inner(right_cell), label_ratio=best_ratio)
+            rl = f"{ratio_left:.2f}" if ratio_left is not None else "N/A"
+            rr = f"{ratio_right:.2f}" if ratio_right is not None else "N/A"
+            print(f"[DEBUG]   {key}: left={'OK' if b64_left else 'None'} ratio={rl}, right={'OK' if b64_right else 'None'} ratio={rr}")
             results[key] = {
                 "chu_ky_lan_1": {"image_b64": b64_left,  "mime": "image/png"} if b64_left  else None,
                 "chu_ky_lan_2": {"image_b64": b64_right, "mime": "image/png"} if b64_right else None,
