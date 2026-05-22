@@ -214,16 +214,24 @@ class SignatureValidator:
         contour_score = self._contour(img_a, img_b)
         deep_score    = self._deep_sim(feat_a, feat_b)
 
-        # overall = trung bình của các chỉ số chính (SIAMESE, DEEP CNN, SSIM)
-        # chỉ tính các chỉ số có sẵn (model có thể chưa load)
-        main_scores = []
-        if siamese_sim > 0:
-            main_scores.append(siamese_sim)
-        if feat_a is not None and feat_b is not None:
-            main_scores.append(deep_score)
-        main_scores.append(ssim_score)
+        # Weighted sum using configured weights; normalise by the sum of weights
+        # whose metric is actually available (Siamese/Deep may be 0 if model not loaded).
+        weighted = 0.0
+        weight_sum = 0.0
 
-        overall = float(np.mean(main_scores))
+        if siamese_sim > 0 or self.w_siamese > 0:
+            weighted   += self.w_siamese * siamese_sim
+            weight_sum += self.w_siamese
+
+        deep_available = feat_a is not None and feat_b is not None
+        if deep_available or self.w_deep > 0:
+            weighted   += self.w_deep * (deep_score if deep_available else 0.0)
+            weight_sum += self.w_deep
+
+        weighted   += self.w_ssim * ssim_score + self.w_orb * orb_score + self.w_contour * contour_score
+        weight_sum += self.w_ssim + self.w_orb + self.w_contour
+
+        overall = float(weighted / weight_sum) if weight_sum > 0 else 0.0
 
         return {
             "siamese": float(siamese_sim),
