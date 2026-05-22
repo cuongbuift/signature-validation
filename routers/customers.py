@@ -4,16 +4,21 @@ import base64
 import io
 import logging
 import os
+import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
+import cv2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from database import get_db
+from detectors import detector
 from models import CustomerRecord
 from routers.extract_c4_form import extract_c4_form
+from routers.extract_signatures import extract_signatures_from_pdf
+from validators import SignatureValidator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/c4-customers", tags=["C4 Customers"])
@@ -214,6 +219,156 @@ def get_signature_image(record_id: int, sig_key: str, db: Session = Depends(get_
     if not path or not Path(path).exists():
         raise HTTPException(status_code=404, detail="Chữ ký không tồn tại.")
     return FileResponse(path, media_type="image/png")
+
+
+_SIG_LABELS = {
+    "sig_ct_lan1":  "CT — Lần 1",
+    "sig_ct_lan2":  "CT — Lần 2",
+    "sig_uq1_lan1": "UQ1 — Lần 1",
+    "sig_uq1_lan2": "UQ1 — Lần 2",
+    "sig_uq2_lan1": "UQ2 — Lần 1",
+    "sig_uq2_lan2": "UQ2 — Lần 2",
+    "sig_uq3_lan1": "UQ3 — Lần 1",
+    "sig_uq3_lan2": "UQ3 — Lần 2",
+}
+
+
+@router.post("/{record_id}/validate-do", summary="Xác thực chữ ký từ file DO với chữ ký khách hàng")
+async def validate_do(
+    record_id: int,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    rec = db.get(CustomerRecord, record_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi.")
+
+    customer_sigs = {
+        k: getattr(rec, k)
+        for k in SIG_KEYS
+        if getattr(rec, k) and Path(getattr(rec, k)).exists()
+    }
+    if not customer_sigs:
+        raise HTTPException(status_code=400, detail="Khách hàng chưa có chữ ký mẫu.")
+
+    from routers.validation import _get_active_config
+    cfg = _get_active_config(db)
+
+    validator = SignatureValidator(
+        similarity_threshold=cfg.similarity_threshold,
+        siamese_weight=cfg.siamese_weight,
+        deep_weight=cfg.deep_weight,
+        ssim_weight=cfg.ssim_weight,
+        orb_weight=cfg.orb_weight,
+        contour_weight=cfg.contour_weight,
+    )
+
+    tmp_dir = STORAGE / "_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    dos_results = []
+    any_do_valid = False
+
+    for upload_file in files:
+        is_pdf = upload_file.content_type == "application/pdf" or (
+            (upload_file.filename or "").lower().endswith(".pdf")
+        )
+        if not is_pdf:
+            dos_results.append({
+                "filename": upload_file.filename or "unknown",
+                "error": "Chỉ hỗ trợ file PDF.",
+                "extracted_count": 0,
+                "extracted_signatures": [],
+                "is_valid": False,
+            })
+            continue
+
+        pdf_bytes = await upload_file.read()
+        try:
+            extracted = extract_signatures_from_pdf(pdf_bytes)
+        except Exception as exc:
+            logger.exception("DO extract error")
+            dos_results.append({
+                "filename": upload_file.filename or "unknown.pdf",
+                "error": f"Lỗi trích xuất: {exc}",
+                "extracted_count": 0,
+                "extracted_signatures": [],
+                "is_valid": False,
+            })
+            continue
+
+        do_sigs_results = []
+        do_valid = False
+
+        for sig_item in extracted:
+            img_bytes = base64.b64decode(sig_item["image_b64"])
+            tmp_path = tmp_dir / f"do_sig_{uuid.uuid4().hex}.png"
+            tmp_path.write_bytes(img_bytes)
+
+            try:
+                cropped = detector.detect_and_crop(tmp_path)
+                if cropped is not None:
+                    cv2.imwrite(str(tmp_path), cropped)
+
+                comparisons = []
+                sig_valid = False
+                best_score = 0.0
+
+                for sig_key, sig_path in customer_sigs.items():
+                    try:
+                        result = validator.validate(
+                            input_path=tmp_path,
+                            reference_paths=[sig_path],
+                        )
+                        if result.is_valid:
+                            sig_valid = True
+                            do_valid = True
+                            any_do_valid = True
+                        best_score = max(best_score, result.overall_score)
+                        comparisons.append({
+                            "sig_key": sig_key,
+                            "sig_label": _SIG_LABELS.get(sig_key, sig_key),
+                            "is_valid": result.is_valid,
+                            "overall_score": round(result.overall_score, 4),
+                            "siamese_score": round(result.siamese_score, 4),
+                            "deep_score": round(result.deep_score, 4),
+                            "ssim_score": round(result.ssim_score, 4),
+                            "orb_score": round(result.orb_score, 4),
+                            "contour_score": round(result.contour_score, 4),
+                        })
+                    except Exception as exc:
+                        logger.exception(f"Validation error for {sig_key}")
+                        comparisons.append({
+                            "sig_key": sig_key,
+                            "sig_label": _SIG_LABELS.get(sig_key, sig_key),
+                            "is_valid": False,
+                            "overall_score": 0.0,
+                            "error": str(exc),
+                        })
+
+                do_sigs_results.append({
+                    "page": sig_item["page"],
+                    "image_b64": sig_item["image_b64"],
+                    "comparisons": comparisons,
+                    "best_score": round(best_score, 4),
+                    "is_valid": sig_valid,
+                })
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+        dos_results.append({
+            "filename": upload_file.filename or "unknown.pdf",
+            "extracted_count": len(do_sigs_results),
+            "extracted_signatures": do_sigs_results,
+            "is_valid": do_valid,
+        })
+
+    return {
+        "customer_id": record_id,
+        "do_valid": any_do_valid,
+        "threshold": cfg.similarity_threshold,
+        "dos": dos_results,
+    }
 
 
 @router.post("/extract-preview", summary="Chỉ trích xuất (không lưu) để xem trước")
