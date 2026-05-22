@@ -365,7 +365,7 @@ async def validate_do(
     return {
         "customer_id": record_id,
         "do_valid": any_do_valid,
-        "threshold": cfg.similarity_threshold,
+        "threshold": settings.similarity_threshold,
         "dos": dos_results,
     }
 
