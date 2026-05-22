@@ -251,16 +251,15 @@ async def validate_do(
     if not customer_sigs:
         raise HTTPException(status_code=400, detail="Khách hàng chưa có chữ ký mẫu.")
 
-    from routers.validation import _get_active_config
-    cfg = _get_active_config(db)
+    from config import settings
 
     validator = SignatureValidator(
-        similarity_threshold=cfg.similarity_threshold,
-        siamese_weight=cfg.siamese_weight,
-        deep_weight=cfg.deep_weight,
-        ssim_weight=cfg.ssim_weight,
-        orb_weight=cfg.orb_weight,
-        contour_weight=cfg.contour_weight,
+        similarity_threshold=settings.similarity_threshold,
+        siamese_weight=settings.siamese_weight,
+        deep_weight=settings.deep_weight,
+        ssim_weight=settings.ssim_weight,
+        orb_weight=settings.orb_weight,
+        contour_weight=settings.contour_weight,
     )
 
     tmp_dir = STORAGE / "_tmp"

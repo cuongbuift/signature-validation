@@ -10,7 +10,7 @@ import cv2
 from config import settings
 from database import get_db
 from detectors import detector
-from models import Employee, ReferenceSignature, ValidationConfig, ValidationRecord
+from models import Employee, ReferenceSignature, ValidationRecord
 from schemas import ValidationResult, ValidationRecordOut
 from validators import SignatureValidator
 
@@ -73,18 +73,17 @@ async def validate_signature(
     if cropped is not None:
         cv2.imwrite(str(tmp_path), cropped)
 
-    # 4. Load validation config
-    cfg = _get_active_config(db)
-    used_threshold = threshold if threshold is not None else cfg.similarity_threshold
+    # 4. Load validation config from settings (config.py)
+    used_threshold = threshold if threshold is not None else settings.similarity_threshold
 
     # 5. Run validation
     validator = SignatureValidator(
         similarity_threshold=used_threshold,
-        siamese_weight=cfg.siamese_weight,
-        deep_weight=cfg.deep_weight,
-        ssim_weight=cfg.ssim_weight,
-        orb_weight=cfg.orb_weight,
-        contour_weight=cfg.contour_weight,
+        siamese_weight=settings.siamese_weight,
+        deep_weight=settings.deep_weight,
+        ssim_weight=settings.ssim_weight,
+        orb_weight=settings.orb_weight,
+        contour_weight=settings.contour_weight,
     )
 
     try:
@@ -159,20 +158,3 @@ def validation_history(
     )
     return records
 
-
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-def _get_active_config(db: Session) -> ValidationConfig:
-    cfg = db.query(ValidationConfig).filter(ValidationConfig.name == "default").first()
-    if cfg is None:
-        cfg = ValidationConfig(
-            name="default",
-            similarity_threshold=settings.similarity_threshold,
-            ssim_weight=settings.ssim_weight,
-            orb_weight=settings.orb_weight,
-            contour_weight=settings.contour_weight,
-        )
-        db.add(cfg)
-        db.commit()
-        db.refresh(cfg)
-    return cfg
