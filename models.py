@@ -45,6 +45,7 @@ class ValidationConfig(Base):
     ssim_weight: Mapped[float] = mapped_column(Float, default=0.20)
     orb_weight: Mapped[float] = mapped_column(Float, default=0.10)
     contour_weight: Mapped[float] = mapped_column(Float, default=0.05)
+    sigver_weight: Mapped[float] = mapped_column(Float, default=0.00)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -62,6 +63,7 @@ class ValidationRecord(Base):
     ssim_score: Mapped[float] = mapped_column(Float, nullable=True)
     orb_score: Mapped[float] = mapped_column(Float, nullable=True)
     contour_score: Mapped[float] = mapped_column(Float, nullable=True)
+    sigver_score: Mapped[float] = mapped_column(Float, nullable=True)
     threshold_used: Mapped[float] = mapped_column(Float, nullable=False)
     validated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -84,6 +86,7 @@ class CustomerRecord(Base):
     giay_phep_ngay_cap: Mapped[str] = mapped_column(String(50), nullable=True)
     giay_phep_noi_cap: Mapped[str] = mapped_column(String(300), nullable=True)
     dia_chi_kinh_doanh: Mapped[str] = mapped_column(String(500), nullable=True)
+    ma_khach_hang: Mapped[str] = mapped_column(String(100), nullable=True)
 
     # Signature image file paths (null = not present)
     sig_ct_lan1: Mapped[str] = mapped_column(String(500), nullable=True)  # chịu trách nhiệm lần 1

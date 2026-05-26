@@ -47,6 +47,7 @@ class ValidationResult(BaseModel):
     ssim_score: float
     orb_score: float
     contour_score: float
+    sigver_score: float
     threshold_used: float
     employee_code: str
     delivery_ref: str | None
@@ -64,6 +65,7 @@ class ValidationRecordOut(BaseModel):
     ssim_score: float | None
     orb_score: float | None
     contour_score: float | None
+    sigver_score: float | None
     threshold_used: float
     validated_at: datetime
 
@@ -79,8 +81,9 @@ class ConfigUpdate(BaseModel):
     ssim_weight: float | None = Field(None, ge=0.0, le=1.0)
     orb_weight: float | None = Field(None, ge=0.0, le=1.0)
     contour_weight: float | None = Field(None, ge=0.0, le=1.0)
+    sigver_weight: float | None = Field(None, ge=0.0, le=1.0)
 
-    @field_validator("siamese_weight", "deep_weight", "ssim_weight", "orb_weight", "contour_weight", mode="before")
+    @field_validator("siamese_weight", "deep_weight", "ssim_weight", "orb_weight", "contour_weight", "sigver_weight", mode="before")
     @classmethod
     def check_weights(cls, v):
         return v  # Cross-field sum validation done in the router
@@ -94,6 +97,7 @@ class ConfigOut(BaseModel):
     ssim_weight: float
     orb_weight: float
     contour_weight: float
+    sigver_weight: float
     updated_at: datetime
 
     model_config = {"from_attributes": True}

@@ -1,7 +1,9 @@
 {
-  "last_trained": "2026-04-15T08:07:47.909596",
-  "n_employees": 4,
-  "n_pairs": 3480,
+  "last_trained": "2026-05-25T06:49:10.947243",
+  "n_employees": 5,
+  "n_customers": 4,
+  "n_identities": 21,
+  "n_pairs": 18270,
   "epochs": 60,
-  "best_val_loss": 0.03305
+  "best_val_loss": 0.00381
 }

@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from PIL import Image
 
 from routers.extract_signatures import (
+    _apply_handwriting_separation,
     _get_ocr_reader,
     _page_to_pil,
     _strip_diacritics,
@@ -216,6 +217,42 @@ def _extract_customer_info(page_img: Image.Image) -> dict:
     if not dia_chi and b:
         dia_chi = _value_below(blocks, b, (0, w))
 
+    # 4. Mã khách hàng (Search key) — top-right box of page 1
+    ma_khach_hang = ""
+    b = find("mã khách hàng", "ma khach hang") or find("search key", "search key")
+    if b:
+        # Value is to the right of the label on the same line
+        val_right = _value_right_of(blocks, b)
+        if val_right:
+            nums = re.findall(r"\b\d{6,}\b", val_right)
+            ma_khach_hang = nums[0] if nums else val_right.strip()
+        if not ma_khach_hang:
+            # Sometimes the value is on the next block below
+            val_below = _value_below(blocks, b, (b["x0"], b["x1"] + 300), max_dy=40)
+            nums = re.findall(r"\b\d{6,}\b", val_below)
+            ma_khach_hang = nums[0] if nums else val_below.strip()
+        if not ma_khach_hang:
+            # The numeric value may sit on the "(Search key)" sub-line which is slightly below
+            val_right_loose = " ".join(
+                bl["text"] for bl in blocks
+                if bl["x0"] > b["x1"] - 10
+                and b["y0"] - 20 <= bl["y0"] <= b["y1"] + 60
+            )
+            nums = re.findall(r"\b\d{6,}\b", val_right_loose)
+            ma_khach_hang = nums[0] if nums else ""
+
+    # Fallback: scan top-right quadrant (top 15% height, right 45% width) for a standalone number
+    if not ma_khach_hang:
+        top_right = [
+            bl for bl in blocks
+            if bl["x0"] > w * 0.55 and bl["y1"] < _h * 0.15
+        ]
+        for bl in top_right:
+            nums = re.findall(r"\b\d{6,}\b", bl["text"])
+            if nums:
+                ma_khach_hang = nums[0]
+                break
+
     return {
         "ten_dang_ky_kinh_doanh": ten_dkk,
         "ten_cua_hang": ten_cua_hang,
@@ -225,6 +262,7 @@ def _extract_customer_info(page_img: Image.Image) -> dict:
             "noi_cap": gp_noi_cap,
         },
         "dia_chi_kinh_doanh": dia_chi,
+        "ma_khach_hang": ma_khach_hang,
     }
 
 
@@ -350,6 +388,10 @@ def _crop_sig_box(page_img: Image.Image, y_top: int, y_bottom: int,
 
     tight = _tight_crop(sig_area, padding=15)
     final = tight if tight is not None else sig_area
+
+    # Remove printed text and ruling lines, keep only handwriting/signature
+    final = _apply_handwriting_separation(final)
+
     return _pil_to_b64(final), label_ratio
 
 

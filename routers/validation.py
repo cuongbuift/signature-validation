@@ -84,6 +84,7 @@ async def validate_signature(
         ssim_weight=settings.ssim_weight,
         orb_weight=settings.orb_weight,
         contour_weight=settings.contour_weight,
+        sigver_weight=settings.sigver_weight,
     )
 
     try:
@@ -107,6 +108,7 @@ async def validate_signature(
         ssim_score=result.ssim_score,
         orb_score=result.orb_score,
         contour_score=result.contour_score,
+        sigver_score=result.sigver_score,
         threshold_used=used_threshold,
     )
     db.add(record)
@@ -126,6 +128,7 @@ async def validate_signature(
         ssim_score=round(result.ssim_score, 4),
         orb_score=round(result.orb_score, 4),
         contour_score=round(result.contour_score, 4),
+        sigver_score=round(result.sigver_score, 4),
         threshold_used=used_threshold,
         employee_code=employee_code,
         delivery_ref=delivery_ref,

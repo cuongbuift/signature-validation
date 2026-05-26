@@ -9,9 +9,14 @@ from pathlib import Path
 from typing import Optional, List
 
 import cv2
+from PIL import Image
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy.orm import Session
+
+import re
+
+import fitz
 
 from database import get_db
 from detectors import detector
@@ -55,6 +60,7 @@ def _record_to_dict(rec: CustomerRecord) -> dict:
     return {
         "id": rec.id,
         "original_filename": rec.original_filename,
+        "ma_khach_hang": rec.ma_khach_hang,
         "ten_dang_ky_kinh_doanh": rec.ten_dang_ky_kinh_doanh,
         "ten_cua_hang": rec.ten_cua_hang,
         "giay_phep_so": rec.giay_phep_so,
@@ -71,6 +77,7 @@ def _record_to_dict(rec: CustomerRecord) -> dict:
 @router.post("", summary="Upload PDF Form C4, trích xuất và lưu thông tin khách hàng")
 async def create_customer(
     file: UploadFile = File(...),
+    ma_khach_hang: str = Form(""),
     ten_dang_ky_kinh_doanh: str = Form(""),
     ten_cua_hang: str = Form(""),
     giay_phep_so: str = Form(""),
@@ -98,6 +105,7 @@ async def create_customer(
     rec = CustomerRecord(
         pdf_path="",
         original_filename=file.filename or "form.pdf",
+        ma_khach_hang=ma_khach_hang or extracted["customer_info"].get("ma_khach_hang", ""),
         ten_dang_ky_kinh_doanh=ten_dang_ky_kinh_doanh or extracted["customer_info"].get("ten_dang_ky_kinh_doanh", ""),
         ten_cua_hang=ten_cua_hang or extracted["customer_info"].get("ten_cua_hang", ""),
         giay_phep_so=giay_phep_so or extracted["customer_info"].get("giay_phep_kinh_doanh", {}).get("so", ""),
@@ -152,6 +160,7 @@ def get_customer(record_id: int, db: Session = Depends(get_db)):
 @router.put("/{record_id}", summary="Cập nhật thông tin khách hàng C4")
 def update_customer(
     record_id: int,
+    ma_khach_hang: Optional[str] = None,
     ten_dang_ky_kinh_doanh: Optional[str] = None,
     ten_cua_hang: Optional[str] = None,
     giay_phep_so: Optional[str] = None,
@@ -163,6 +172,8 @@ def update_customer(
     rec = db.get(CustomerRecord, record_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi.")
+    if ma_khach_hang is not None:
+        rec.ma_khach_hang = ma_khach_hang
     if ten_dang_ky_kinh_doanh is not None:
         rec.ten_dang_ky_kinh_doanh = ten_dang_ky_kinh_doanh
     if ten_cua_hang is not None:
@@ -367,6 +378,192 @@ async def validate_do(
         "do_valid": any_do_valid,
         "threshold": settings.similarity_threshold,
         "dos": dos_results,
+    }
+
+
+_OCR_DIGIT_FIX = str.maketrans({'O': '0', 'o': '0', 'l': '1', 'I': '1', '/': '0', ' ': '', '\t': ''})
+
+
+def _fix_ocr_digits(text: str) -> str:
+    """Fix common OCR misreads in what should be an all-digit string."""
+    return text.translate(_OCR_DIGIT_FIX)
+
+
+def _extract_ma_kh_from_do(pdf_bytes: bytes) -> tuple[str, str]:
+    """
+    Extract (ma_khach_hang, do_so) from a DO PDF using OCR on the top-left strip.
+    Returns (ma_kh, do_so) — either may be "" if not found.
+    """
+    from routers.extract_signatures import _get_ocr_reader, SCALE
+    import numpy as np
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[0]
+    mat = fitz.Matrix(SCALE, SCALE)
+    pix = page.get_pixmap(matrix=mat)
+    full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    doc.close()
+
+    w, h = full_img.size
+    topleft  = full_img.crop((0, 0, int(w * 0.55), int(h * 0.08)))
+    topright = full_img.crop((int(w * 0.50), 0, w, int(h * 0.08)))
+
+    reader = _get_ocr_reader()
+
+    ma_kh = ""
+    for (_, text, _conf) in reader.readtext(np.array(topleft), detail=1, paragraph=False):
+        # Apply digit-fixing before matching so OCR glitches like "10/094989" → "100094989"
+        candidate = _fix_ocr_digits(text.strip())
+        m = re.match(r"(\d{6,10})", candidate)
+        if m:
+            ma_kh = m.group(1)
+            break
+
+    do_so = ""
+    for (_, text, _conf) in reader.readtext(np.array(topright), detail=1, paragraph=False):
+        m = re.search(r"DO\s*[Ss]ố\s*[:\-]?\s*(\S+)", text) or re.search(r"(\d[A-Z]{2}\d{4}-\d{5})", text)
+        if m:
+            do_so = m.group(1)
+            break
+
+    return ma_kh, do_so
+
+
+@router.post("/check-do-batch", summary="Kiểm tra DO hàng loạt — tự nhận diện khách hàng từ mã KH trên DO")
+async def check_do_batch(
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    from config import settings
+
+    validator = SignatureValidator(
+        similarity_threshold=settings.similarity_threshold,
+        siamese_weight=settings.siamese_weight,
+        deep_weight=settings.deep_weight,
+        ssim_weight=settings.ssim_weight,
+        orb_weight=settings.orb_weight,
+        contour_weight=settings.contour_weight,
+    )
+
+    tmp_dir = STORAGE / "_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+
+    for upload_file in files:
+        filename = upload_file.filename or "unknown.pdf"
+        is_pdf = upload_file.content_type == "application/pdf" or filename.lower().endswith(".pdf")
+        if not is_pdf:
+            results.append({"filename": filename, "error": "Chỉ hỗ trợ file PDF.", "is_valid": False})
+            continue
+
+        pdf_bytes = await upload_file.read()
+
+        # 1. Identify customer from mã KH (OCR on top-left strip)
+        ma_kh, do_so = _extract_ma_kh_from_do(pdf_bytes)
+
+        rec: CustomerRecord | None = None
+        if ma_kh:
+            rec = db.query(CustomerRecord).filter(CustomerRecord.ma_khach_hang == ma_kh).first()
+
+        base_info = {
+            "filename": filename,
+            "do_so": do_so,
+            "ma_khach_hang": ma_kh,
+            "customer_found": rec is not None,
+            "customer_id": rec.id if rec else None,
+            "customer_name": (rec.ten_dang_ky_kinh_doanh or rec.ten_cua_hang or "") if rec else "",
+        }
+
+        if not ma_kh:
+            results.append({**base_info, "error": "Không trích xuất được mã khách hàng từ DO.", "is_valid": False, "extracted_signatures": []})
+            continue
+
+        if not rec:
+            results.append({**base_info, "error": f"Không tìm thấy khách hàng với mã '{ma_kh}' trong hệ thống.", "is_valid": False, "extracted_signatures": []})
+            continue
+
+        customer_sigs = {
+            k: getattr(rec, k) for k in SIG_KEYS
+            if getattr(rec, k) and Path(getattr(rec, k)).exists()
+        }
+        if not customer_sigs:
+            results.append({**base_info, "error": "Khách hàng chưa có chữ ký mẫu.", "is_valid": False, "extracted_signatures": []})
+            continue
+
+        # 2. Extract signatures from DO
+        try:
+            extracted = extract_signatures_from_pdf(pdf_bytes)
+        except Exception as exc:
+            logger.exception("DO extract error")
+            results.append({**base_info, "error": f"Lỗi trích xuất chữ ký: {exc}", "is_valid": False, "extracted_signatures": []})
+            continue
+
+        do_sigs_results = []
+        do_valid = False
+
+        for sig_item in extracted:
+            img_bytes = base64.b64decode(sig_item["image_b64"])
+            tmp_path = tmp_dir / f"do_chk_{uuid.uuid4().hex}.png"
+            tmp_path.write_bytes(img_bytes)
+
+            try:
+                cropped = detector.detect_and_crop(tmp_path)
+                if cropped is not None:
+                    cv2.imwrite(str(tmp_path), cropped)
+
+                comparisons = []
+                sig_valid = False
+                best_score = 0.0
+
+                for sig_key, sig_path in customer_sigs.items():
+                    try:
+                        result = validator.validate(input_path=tmp_path, reference_paths=[sig_path])
+                        if result.is_valid:
+                            sig_valid = True
+                            do_valid = True
+                        best_score = max(best_score, result.overall_score)
+                        comparisons.append({
+                            "sig_key": sig_key,
+                            "sig_label": _SIG_LABELS.get(sig_key, sig_key),
+                            "is_valid": result.is_valid,
+                            "overall_score": round(result.overall_score, 4),
+                            "siamese_score": round(result.siamese_score, 4),
+                            "deep_score": round(result.deep_score, 4),
+                            "ssim_score": round(result.ssim_score, 4),
+                        })
+                    except Exception as exc:
+                        logger.exception(f"Validation error for {sig_key}")
+                        comparisons.append({
+                            "sig_key": sig_key,
+                            "sig_label": _SIG_LABELS.get(sig_key, sig_key),
+                            "is_valid": False,
+                            "overall_score": 0.0,
+                            "error": str(exc),
+                        })
+
+                do_sigs_results.append({
+                    "page": sig_item["page"],
+                    "image_b64": sig_item["image_b64"],
+                    "comparisons": comparisons,
+                    "best_score": round(best_score, 4),
+                    "is_valid": sig_valid,
+                })
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+        results.append({
+            **base_info,
+            "extracted_count": len(do_sigs_results),
+            "extracted_signatures": do_sigs_results,
+            "is_valid": do_valid,
+        })
+
+    overall_valid = any(r.get("is_valid") for r in results)
+    return {
+        "overall_valid": overall_valid,
+        "threshold": settings.similarity_threshold,
+        "results": results,
     }
 
 

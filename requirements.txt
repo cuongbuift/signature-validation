@@ -11,6 +11,8 @@ pydantic-settings==2.6.1
 eval_type_backport>=0.2.0
 ultralytics>=8.0.0
 huggingface-hub>=0.20.0
+git+https://github.com/luizgh/sigver
+gdown>=5.1.0
 pymupdf>=1.24.0
 easyocr>=1.7.0
 vietocr>=0.3.5

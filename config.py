@@ -19,14 +19,18 @@ class Settings(BaseSettings):
 
     # ── Validation ────────────────────────────────────────────────────────────
     similarity_threshold: float = 0.80
-    siamese_weight: float = 0.70
+    siamese_weight: float = 0.30
     deep_weight: float = 0.30
     ssim_weight: float = 0.10
     orb_weight: float = 0.00
     contour_weight: float = 0.00
+    sigver_weight: float = 0.40
 
     # ── Siamese model ─────────────────────────────────────────────────────────
     siamese_model_path: Path = Path("models/siamese.pt")
+
+    # ── SigNet (sigver) model ─────────────────────────────────────────────────
+    sigver_model_path: Path = Path("models/signet.pth")
     max_reference_signatures: int = 2
 
     # ── Image processing ──────────────────────────────────────────────────────

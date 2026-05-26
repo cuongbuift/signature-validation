@@ -213,6 +213,85 @@ def _build_clean_ink_mask(arr: np.ndarray) -> np.ndarray:
     return clean
 
 
+def _apply_handwriting_separation(img: Image.Image) -> Image.Image:
+    """
+    Return a version of *img* with printed text and ruling lines removed,
+    keeping only handwriting (signature strokes + handwritten name).
+
+    Strategy:
+    - If significant colored ink (blue/purple) is detected via LAB color space
+      → use the LAB mask, which cleanly separates colored handwriting from
+        neutral-black printed text.
+    - Otherwise (black-ink signatures) → use morphological ruling-line removal
+      then filter out small components that match printed-text character sizes.
+
+    The result always has a white background.
+    """
+    import cv2
+
+    arr = np.array(img.convert("RGB"))
+    h, w = arr.shape[:2]
+    if h == 0 or w == 0:
+        return img
+
+    # ── LAB color separation ────────────────────────────────────────────────
+    lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+    L_ch = lab[:, :, 0].astype(float)
+    A_ch = lab[:, :, 1].astype(float)
+    B_ch = lab[:, :, 2].astype(float)
+
+    # Colored ink: A deviates from neutral (128) → red/purple or green,
+    # or B < 120 → blue pen ink.  Must also be dark enough (not white paper).
+    colored_mask = (
+        ((A_ch > 134) | (A_ch < 124) | (B_ch < 120)) &
+        (L_ch < 230)
+    ).astype(np.uint8) * 255
+
+    # Measure how much of the visible ink is colored
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    _, all_ink = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+    total_ink_px = int(np.count_nonzero(all_ink))
+    colored_ink_px = int(np.count_nonzero(colored_mask))
+
+    if total_ink_px > 0 and colored_ink_px / total_ink_px > 0.15:
+        # Enough colored ink → LAB mask cleanly removes black printed text
+        raw_mask = colored_mask
+    else:
+        # Black-ink signature → start from full ink mask and remove lines +
+        # small text-sized components.
+        raw_mask = _build_clean_ink_mask(arr)
+
+        # Remove connected components that look like printed-text characters:
+        # at 200 DPI a typical Latin/Vietnamese printed char is 10–40 px tall
+        # and has area < 600 px².  Signature strokes are larger / wider.
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            raw_mask, connectivity=8
+        )
+        filtered = np.zeros_like(raw_mask)
+        for i in range(1, num_labels):
+            area   = int(stats[i, cv2.CC_STAT_AREA])
+            comp_h = int(stats[i, cv2.CC_STAT_HEIGHT])
+            comp_w = int(stats[i, cv2.CC_STAT_WIDTH])
+            # Keep if it looks like a signature stroke (large area, wide, or tall)
+            if area >= 600 or comp_w >= 60 or comp_h >= 40:
+                filtered[labels == i] = 255
+        raw_mask = filtered
+
+    # Remove tiny noise from whichever mask we chose
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        raw_mask, connectivity=8
+    )
+    clean = np.zeros_like(raw_mask)
+    for i in range(1, num_labels):
+        if int(stats[i, cv2.CC_STAT_AREA]) >= 15:
+            clean[labels == i] = 255
+
+    # Compose: keep original RGB colour at ink pixels, white elsewhere
+    result = np.full_like(arr, 255)
+    result[clean > 0] = arr[clean > 0]
+    return Image.fromarray(result)
+
+
 def _tight_crop(img: Image.Image, padding: int = 20) -> Optional[Image.Image]:
     """
     Remove scanner artefacts and noise, then tight-crop to the bounding box
@@ -250,6 +329,9 @@ def _crop_signature(img: Image.Image, label_y_bottom: int) -> Image.Image:
 
     tight = _tight_crop(raw)
     result = tight if tight is not None else raw
+
+    # Separate handwriting/signature from printed text and ruling lines
+    result = _apply_handwriting_separation(result)
 
     # Enforce max height = width so scanner-fold artifacts can't inflate the crop
     rw, rh = result.size

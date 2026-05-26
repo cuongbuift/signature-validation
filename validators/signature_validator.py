@@ -26,6 +26,7 @@ class SignatureScores:
     ssim_score: float
     orb_score: float
     contour_score: float
+    sigver_score: float
     overall_score: float
     is_valid: bool
     detail: dict = field(default_factory=dict)
@@ -42,6 +43,7 @@ class SignatureValidator:
         ssim_weight: float = 0.20,
         orb_weight: float = 0.10,
         contour_weight: float = 0.05,
+        sigver_weight: float = 0.00,
     ):
         self.threshold    = similarity_threshold
         self.w_siamese    = siamese_weight
@@ -49,6 +51,7 @@ class SignatureValidator:
         self.w_ssim       = ssim_weight
         self.w_orb        = orb_weight
         self.w_contour    = contour_weight
+        self.w_sigver     = sigver_weight
 
     # ------------------------------------------------------------------
     # Public API
@@ -76,7 +79,8 @@ class SignatureValidator:
             ref_img      = self._load_and_preprocess(ref_path)
             ref_feat     = self._deep_features(ref_img)
             siamese_sim  = self._siamese_score(input_img, ref_img)
-            scores       = self._compare(input_img, ref_img, input_feat, ref_feat, siamese_sim)
+            sigver_sim   = self._sigver_score(input_img, ref_img)
+            scores       = self._compare(input_img, ref_img, input_feat, ref_feat, siamese_sim, sigver_sim)
 
             per_ref.append({
                 "reference": str(ref_path),
@@ -85,6 +89,7 @@ class SignatureValidator:
                 "ssim":      round(scores["ssim"],    4),
                 "orb":       round(scores["orb"],     4),
                 "contour":   round(scores["contour"], 4),
+                "sigver":    round(scores["sigver"],  4),
                 "overall":   round(scores["overall"], 4),
             })
 
@@ -95,6 +100,7 @@ class SignatureValidator:
                     ssim_score    = scores["ssim"],
                     orb_score     = scores["orb"],
                     contour_score = scores["contour"],
+                    sigver_score  = scores["sigver"],
                     overall_score = scores["overall"],
                     is_valid      = scores["overall"] >= self.threshold,
                     detail        = {},
@@ -208,14 +214,13 @@ class SignatureValidator:
         feat_a: np.ndarray | None,
         feat_b: np.ndarray | None,
         siamese_sim: float = 0.0,
+        sigver_sim: float = 0.0,
     ) -> dict:
         ssim_score    = self._ssim(img_a, img_b)
         orb_score     = self._orb(img_a, img_b)
         contour_score = self._contour(img_a, img_b)
         deep_score    = self._deep_sim(feat_a, feat_b)
 
-        # Weighted sum using configured weights; normalise by the sum of weights
-        # whose metric is actually available (Siamese/Deep may be 0 if model not loaded).
         weighted = 0.0
         weight_sum = 0.0
 
@@ -228,6 +233,10 @@ class SignatureValidator:
             weighted   += self.w_deep * (deep_score if deep_available else 0.0)
             weight_sum += self.w_deep
 
+        if sigver_sim > 0 or self.w_sigver > 0:
+            weighted   += self.w_sigver * sigver_sim
+            weight_sum += self.w_sigver
+
         weighted   += self.w_ssim * ssim_score + self.w_orb * orb_score + self.w_contour * contour_score
         weight_sum += self.w_ssim + self.w_orb + self.w_contour
 
@@ -239,6 +248,7 @@ class SignatureValidator:
             "ssim":    float(ssim_score),
             "orb":     float(orb_score),
             "contour": float(contour_score),
+            "sigver":  float(sigver_sim),
             "overall": float(overall),
         }
 
@@ -247,6 +257,14 @@ class SignatureValidator:
         try:
             from validators.siamese_network import SiameseValidator
             return SiameseValidator.instance().compare(img_a, img_b)
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _sigver_score(img_a: np.ndarray, img_b: np.ndarray) -> float:
+        try:
+            from validators.sigver_validator import SigverValidator
+            return SigverValidator.instance().compare(img_a, img_b)
         except Exception:
             return 0.0
 
